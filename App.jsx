@@ -1811,6 +1811,7 @@ export default function App() {
             course. The AI listener is software and is labelled as such everywhere it appears. Neither
             can diagnose, prescribe, or manage a crisis.
           </p>
+          <p className={clsx("mt-6 text-xs", t.faint)}>Built by Vexoro team</p>
         </div>
       </footer>
     </div>
