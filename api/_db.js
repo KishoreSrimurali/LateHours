@@ -4,15 +4,36 @@ const { Pool } = pg;
 
 let pool;
 
+/* Neon (and some other providers) append `channel_binding=require` to the
+   connection string they hand you. That's a libpq-specific flag asking
+   for SCRAM channel binding tied to the TLS certificate — node-postgres
+   doesn't implement it, and depending on version either ignores it or
+   trips over it, which shows up as intermittent connection failures
+   rather than a clean, consistent error. TLS itself is still enforced
+   below via the `ssl` option, so dropping this parameter loses nothing;
+   it just stops asking node-postgres for something it can't do. */
+function stripChannelBinding(connectionString) {
+  try {
+    const url = new URL(connectionString);
+    url.searchParams.delete('channel_binding');
+    return url.toString();
+  } catch {
+    // Not a parseable URL for some reason — pass it through unchanged
+    // rather than fail the whole connection over a cosmetic cleanup.
+    return connectionString;
+  }
+}
+
 /* One pool per warm serverless instance. Neon/Vercel Postgres/Supabase all
    want TLS; local Postgres during `vercel dev` usually doesn't advertise a
    cert, so we don't fail closed on an unverifiable chain. */
 function getPool() {
   if (!pool) {
-    const connectionString = process.env.DATABASE_URL;
-    if (!connectionString) {
+    const raw = process.env.DATABASE_URL;
+    if (!raw) {
       throw new Error('DATABASE_URL is not configured.');
     }
+    const connectionString = stripChannelBinding(raw);
     pool = new Pool({
       connectionString,
       ssl: connectionString.includes('sslmode=disable')
