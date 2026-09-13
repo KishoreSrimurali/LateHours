@@ -4,16 +4,19 @@ import {
   Heart, AlertTriangle, X, Check, ChevronRight, ChevronLeft, Settings as Cog,
   LogOut, Users, Search, Wind, Flag, SkipForward, Star, Clock, Award,
   BookOpen, Eye, EyeOff, Sun, Moon, ArrowLeft, Ban, Volume2, VolumeX,
-  Sparkles, UserCheck, Trash2, Phone, Bot, WifiOff, Loader
+  Sparkles, UserCheck, Trash2, Phone, Bot, Loader
 } from "lucide-react";
+import Pusher from "pusher-js";
 
 /* ------------------------------------------------------------------ *
  *  Late Hours — anonymous peer support
  *
  *  NOTHING IN THIS FILE IS SIMULATED USER DATA.
- *  There are no seeded peers, no invented online counts, no fake wait
- *  times. Anything the interface can't truthfully know is shown as an
- *  empty state until a real backend supplies it. See PRESENCE below.
+ *  Accounts, sessions, moods, presence, and matching are all real,
+ *  served by the /api functions in this repo (Postgres + Pusher — see
+ *  README.md). Anything the interface can't truthfully know yet (no
+ *  matches recorded, nobody online) is shown as an empty state rather
+ *  than an invented number.
  *
  *  The AI listener is a real Claude API call. The browser calls the
  *  same-origin /api/listener Vercel function so the Anthropic key stays
@@ -22,15 +25,6 @@ import {
 
 const CHAT_ENDPOINT = "/api/listener";
 const CHAT_MODEL = "claude-sonnet-4-6";
-
-/* Real presence requires a websocket/presence service. Until one is
-   connected these stay null and the UI says so rather than inventing
-   a number. Wire them to your server and the counts appear. */
-const PRESENCE = {
-  listenersOnline: null,   // number | null
-  medianWaitSeconds: null, // number | null
-};
-const REAL_LISTENERS = []; // populated by your matching service, never seeded
 
 const TOPICS = [
   "Anxiety", "Low mood", "Loneliness", "Work stress", "Grief",
@@ -114,11 +108,39 @@ function useReducedMotion() {
   return r;
 }
 
+/* Every /api call goes through here: same-origin, JSON in, JSON out, the
+   session cookie riding along automatically. Thrown errors carry the
+   server's own message so callers can show it directly. */
+async function api(path, opts = {}) {
+  const res = await fetch(path, {
+    method: opts.method || "GET",
+    headers: opts.body ? { "Content-Type": "application/json" } : undefined,
+    body: opts.body ? JSON.stringify(opts.body) : undefined,
+  });
+  let data = null;
+  try { data = await res.json(); } catch { /* empty body */ }
+  if (!res.ok) throw new Error(data?.error || `Request failed (${res.status})`);
+  return data;
+}
+
+/* One Pusher connection per tab, created the first time anything needs
+   it. Auth for private channels goes through /api/pusher-auth, which
+   checks the same session cookie every other endpoint does. */
+let pusherClient = null;
+function getPusherClient() {
+  if (!pusherClient && import.meta.env.VITE_PUSHER_KEY) {
+    pusherClient = new Pusher(import.meta.env.VITE_PUSHER_KEY, {
+      cluster: import.meta.env.VITE_PUSHER_CLUSTER || "mt1",
+      channelAuthorization: { endpoint: "/api/pusher-auth", transport: "ajax" },
+    });
+  }
+  return pusherClient;
+}
+
 async function askListener(history) {
-  const res = await fetch(CHAT_ENDPOINT, {
+  const data = await api(CHAT_ENDPOINT, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
+    body: {
       model: CHAT_MODEL,
       max_tokens: 1000,
       system: AI_SYSTEM,
@@ -126,10 +148,8 @@ async function askListener(history) {
         role: m.who === "me" ? "user" : "assistant",
         content: m.text,
       })),
-    }),
+    },
   });
-  if (!res.ok) throw new Error(`Listener unavailable (${res.status})`);
-  const data = await res.json();
   return data.content
     .map((c) => (c.type === "text" ? c.text : ""))
     .filter(Boolean)
@@ -312,7 +332,7 @@ function Toasts({ items, dismiss }) {
 
 /* -------------------------------- landing --------------------------------- */
 
-function Landing({ t, onStart, onSafety }) {
+function Landing({ t, onStart, onSafety, presence }) {
   const reduced = useReducedMotion();
   return (
     <div className="mx-auto max-w-5xl px-6 py-12 sm:py-20">
@@ -355,9 +375,9 @@ function Landing({ t, onStart, onSafety }) {
               Someone picks up, or something does.
             </p>
             <p className={clsx("mt-2 text-center text-sm leading-relaxed", t.faint)}>
-              {PRESENCE.listenersOnline === null
-                ? "Live listener counts appear once a presence server is connected."
-                : `${PRESENCE.listenersOnline} listeners online now`}
+              {presence.listenersOnline === null
+                ? "Listener counts appear once the presence service responds."
+                : `${presence.listenersOnline} listener${presence.listenersOnline === 1 ? "" : "s"} online now`}
             </p>
           </div>
 
@@ -379,13 +399,14 @@ function Landing({ t, onStart, onSafety }) {
 
 /* ---------------------------------- auth ---------------------------------- */
 
-function Auth({ t, accounts, onAuthed, notify, onBack }) {
+function Auth({ t, onAuthed, notify, onBack }) {
   const [mode, setMode] = useState("signup");
   const [email, setEmail] = useState("");
   const [pw, setPw] = useState("");
   const [show, setShow] = useState(false);
   const [age, setAge] = useState(false);
   const [err, setErr] = useState("");
+  const [busy, setBusy] = useState(false);
 
   const strength = useMemo(() => {
     let s = 0;
@@ -396,23 +417,29 @@ function Auth({ t, accounts, onAuthed, notify, onBack }) {
     return s;
   }, [pw]);
 
-  const submit = () => {
+  const submit = async () => {
     setErr("");
     const clean = sanitize(email, 254).trim().toLowerCase();
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(clean)) return setErr("That email address isn't complete.");
     if (pw.length < 12) return setErr("Passwords need at least 12 characters.");
     if (mode === "signup") {
       if (!age) return setErr("Confirm you're 18 or older to continue.");
-      if (accounts.some((a) => a.email === clean))
-        return setErr("An account already uses that email. Sign in instead.");
-      onAuthed({ email: clean, pw }, true);
-    } else {
-      const acct = accounts.find((a) => a.email === clean);
-      /* Same message either way — telling someone an email exists lets an
-         attacker enumerate your users. */
-      if (!acct || acct.pw !== pw) return setErr("That email and password don't match.");
-      onAuthed(acct, false);
-      notify(`Welcome back, ${acct.handle}`);
+      /* The account isn't created yet — signup needs a handle, role, and
+         topics that Onboarding collects next. This just carries the
+         credentials forward; /api/auth/signup runs once onboarding
+         finishes, and that's where a taken email is actually caught. */
+      onAuthed({ email: clean, pw, age18: age }, true);
+      return;
+    }
+    setBusy(true);
+    try {
+      const { account } = await api("/api/auth/login", { method: "POST", body: { email: clean, password: pw } });
+      onAuthed(account, false);
+      notify(`Welcome back, ${account.handle}`);
+    } catch (e) {
+      setErr(e.message);
+    } finally {
+      setBusy(false);
     }
   };
 
@@ -483,8 +510,8 @@ function Auth({ t, accounts, onAuthed, notify, onBack }) {
           </p>
         )}
 
-        <Button _t={t} size="lg" className="w-full" onClick={submit}>
-          {mode === "signup" ? "Create account" : "Sign in"}
+        <Button _t={t} size="lg" className="w-full" onClick={submit} disabled={busy}>
+          {mode === "signup" ? "Create account" : busy ? "Signing in…" : "Sign in"}
         </Button>
 
         <p className={clsx("text-center text-sm", t.faint)}>
@@ -621,7 +648,7 @@ function Onboarding({ t, draft, setDraft, onDone, notify }) {
 
 /* ---------------------------------- home ---------------------------------- */
 
-function Home({ t, user, setUser, sessions, moods, onMood, onMatchHuman, onTalkToAI, onTraining, onSafety, notify }) {
+function Home({ t, user, setUser, sessions, moods, onMood, onMatchHuman, onTalkToAI, onTakeCall, onTraining, onSafety, presence, notify }) {
   const totalMin = sessions.reduce((a, s) => a + Math.round(s.seconds / 60), 0);
   const rated = sessions.filter((s) => s.rating > 0);
   const avg = rated.length ? (rated.reduce((a, s) => a + s.rating, 0) / rated.length).toFixed(1) : null;
@@ -650,9 +677,9 @@ function Home({ t, user, setUser, sessions, moods, onMood, onMatchHuman, onTalkT
         <div className={clsx("rounded-3xl border p-6 lg:col-span-2", t.surface, t.border)}>
           <h2 className="font-serif text-2xl">Start a conversation</h2>
           <p className={clsx("mt-2 text-sm leading-relaxed", t.muted)}>
-            {PRESENCE.medianWaitSeconds === null
-              ? "Wait times show here once your matching service reports them."
-              : `Median wait right now: ${PRESENCE.medianWaitSeconds} seconds.`}
+            {presence.medianWaitSeconds === null
+              ? "Wait times show up here once a few matches have happened."
+              : `Median wait right now: ${presence.medianWaitSeconds} seconds.`}
           </p>
 
           <div className="mt-6 space-y-5">
@@ -694,7 +721,7 @@ function Home({ t, user, setUser, sessions, moods, onMood, onMatchHuman, onTalkT
 
           {user.role !== "seeker" && (
             <div className={clsx("mt-6 border-t pt-5", t.border)}>
-              <Button _t={t} variant="ghost" onClick={() => (user.trained ? notify("Nobody is waiting right now. You'll be notified when someone is.") : onTraining())}>
+              <Button _t={t} variant="ghost" onClick={() => (user.trained ? onTakeCall() : onTraining())}>
                 <Heart size={16} /> {user.trained ? "Take a call" : "Finish training to listen"}
               </Button>
             </div>
@@ -801,37 +828,67 @@ function Home({ t, user, setUser, sessions, moods, onMood, onMatchHuman, onTalkT
 
 /* --------------------------------- queue ---------------------------------- */
 
-function Queue({ t, user, onMatched, onCancel, onTalkToAI }) {
+/* role: "seeker" looking for a listener, or "listener" going available to
+   take one. Either way this joins the real /api/queue row, then either
+   gets matched inline (the other side was already waiting) or sits on a
+   private Pusher channel until a later join matches it. */
+function Queue({ t, user, role = "seeker", onMatched, onCancel, onTalkToAI, presence, notify }) {
   const [secs, setSecs] = useState(0);
+  const [err, setErr] = useState("");
   const reduced = useReducedMotion();
-  const none = REAL_LISTENERS.length === 0;
+  const settled = useRef(false);
 
   useEffect(() => {
-    if (none) return;
     const i = setInterval(() => setSecs((s) => s + 1), 1000);
     return () => clearInterval(i);
-  }, [none]);
+  }, []);
 
   useEffect(() => {
-    if (none || REAL_LISTENERS.length === 0) return;
-    const candidates = REAL_LISTENERS.filter((p) => p.langs?.includes(user.lang));
-    if (candidates.length) onMatched(pick(candidates));
-  }, [none, onMatched, user.lang]);
+    let cancelled = false;
+    let channel = null;
+    const client = getPusherClient();
 
-  if (none) {
+    (async () => {
+      try {
+        const body =
+          role === "listener"
+            ? { role: "listener", lang: user.lang, mode: user.mode }
+            : { role: "seeker", topics: user.topics, lang: user.lang, mode: user.mode };
+        const result = await api("/api/queue", { method: "POST", body });
+        if (cancelled) return;
+        if (result.matched) {
+          settled.current = true;
+          onMatched(result);
+          return;
+        }
+        if (client) {
+          channel = client.subscribe(`private-user-${user.id}`);
+          channel.bind("matched", (payload) => {
+            settled.current = true;
+            onMatched(payload);
+          });
+        }
+      } catch (e) {
+        if (!cancelled) setErr(e.message);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      if (channel) client?.unsubscribe(`private-user-${user.id}`);
+      /* Leaving mid-wait (cancelled, or the match already came through and
+         we navigated away) — either way there's nothing left to hold open. */
+      if (!settled.current) api("/api/queue", { method: "DELETE" }).catch(() => {});
+    };
+  }, [role, user.id, user.lang, user.mode, user.topics, onMatched]);
+
+  if (err) {
     return (
       <div className="mx-auto flex min-h-[70vh] max-w-md flex-col items-center justify-center px-6 text-center">
-        <WifiOff size={30} className={t.faint} />
-        <h1 className="mt-6 font-serif text-3xl leading-tight">No human listeners are online.</h1>
-        <p className={clsx("mt-4 text-sm leading-relaxed", t.muted)}>
-          This isn't a queue you're stuck at the back of — the matching service hasn't been connected
-          yet, so there's genuinely nobody on the other side. Rather than leave you waiting for a
-          number that doesn't exist, here's what is actually available.
-        </p>
-        <div className="mt-8 flex flex-wrap justify-center gap-3">
-          <Button _t={t} size="lg" onClick={onTalkToAI}><Bot size={16} /> Talk to the AI listener</Button>
-          <Button _t={t} size="lg" variant="ghost" onClick={onCancel}>Back</Button>
-        </div>
+        <AlertTriangle size={30} className={t.faint} />
+        <h1 className="mt-6 font-serif text-3xl leading-tight">Couldn't join the queue.</h1>
+        <p className={clsx("mt-4 text-sm leading-relaxed", t.muted)}>{err}</p>
+        <Button _t={t} size="lg" variant="ghost" className="mt-8" onClick={onCancel}>Back</Button>
       </div>
     );
   }
@@ -842,11 +899,21 @@ function Queue({ t, user, onMatched, onCancel, onTalkToAI }) {
         <span className={clsx("absolute h-full w-full rounded-full border border-indigo-700", !reduced && "animate-ping")} />
         <Mark size={40} />
       </div>
-      <h1 className="mt-10 font-serif text-3xl leading-tight">Looking for someone with time.</h1>
+      <h1 className="mt-10 font-serif text-3xl leading-tight">
+        {role === "listener" ? "You're available. Waiting for someone to talk to." : "Looking for someone with time."}
+      </h1>
       <p className={clsx("mt-6 flex items-center gap-2 text-sm", t.faint)}>
         <Clock size={14} /> {fmtTime(secs)} waiting
       </p>
-      <Button _t={t} variant="quiet" className="mt-8" onClick={onCancel}>Cancel</Button>
+      {role === "seeker" && presence?.listenersOnline === 0 && (
+        <p className={clsx("mt-4 text-sm leading-relaxed", t.muted)}>
+          Nobody's online right now — you can keep waiting, or talk to the AI listener instead.
+        </p>
+      )}
+      <div className="mt-8 flex flex-wrap justify-center gap-3">
+        {role === "seeker" && <Button _t={t} onClick={onTalkToAI}><Bot size={16} /> Talk to the AI listener</Button>}
+        <Button _t={t} variant="quiet" onClick={onCancel}>Cancel</Button>
+      </div>
     </div>
   );
 }
@@ -972,6 +1039,7 @@ function Call({ t, user, peer, onEnd, notify, onSafety }) {
   const streamRef = useRef(null);
   const chatEndRef = useRef(null);
   const recogRef = useRef(null);
+  const callChannelRef = useRef(null);
 
   const useVideo = user.mode === "video" && !isAI;
   const useAudioDevice = !isAI && user.mode !== "text";
@@ -1012,6 +1080,27 @@ function Call({ t, user, peer, onEnd, notify, onSafety }) {
     setMsgs([{ id: 1, who: "peer", text: "I'm here. Start wherever you want — it doesn't have to make sense yet." }]);
   }, [isAI, msgs.length]);
 
+  /* For a human call, messages travel over a private Pusher channel scoped
+     to this one call — /api/pusher-auth only signs it for the two accounts
+     the /api/queue match created it for. Pusher's own "client events" carry
+     the text directly between the two browsers without another server
+     round trip; the channel must have client events enabled in the Pusher
+     dashboard for that app. */
+  useEffect(() => {
+    if (isAI || !peer.callId) return;
+    const client = getPusherClient();
+    if (!client) return;
+    const channel = client.subscribe(`private-call-${peer.callId}`);
+    callChannelRef.current = channel;
+    const onMessage = (data) => setMsgs((m) => [...m, { id: Date.now() + Math.random(), who: "peer", text: data.text }]);
+    channel.bind("client-message", onMessage);
+    return () => {
+      channel.unbind("client-message", onMessage);
+      client.unsubscribe(`private-call-${peer.callId}`);
+      callChannelRef.current = null;
+    };
+  }, [isAI, peer.callId]);
+
   /* real browser speech synthesis, not a simulation */
   const speak = useCallback((text) => {
     if (!speakReplies || typeof window === "undefined" || !window.speechSynthesis) return;
@@ -1044,7 +1133,10 @@ function Call({ t, user, peer, onEnd, notify, onSafety }) {
     const next = [...msgs, { id: Date.now(), who: "me", text }];
     setMsgs(next);
     setDraft("");
-    if (!isAI) return;
+    if (!isAI) {
+      callChannelRef.current?.trigger("client-message", { text });
+      return;
+    }
 
     setThinking(true);
     try {
@@ -1181,7 +1273,16 @@ function Call({ t, user, peer, onEnd, notify, onSafety }) {
         <div className="mt-5 space-y-2">
           {["Harassment or abuse", "Sexual content", "Trying to get personal details", "Selling something", "Someone is in danger"].map((r) => (
             <button key={r}
-              onClick={() => { setReportOpen(false); notify("Report sent. The call has ended.", "bad"); onEnd(secs, true); }}
+              onClick={async () => {
+                setReportOpen(false);
+                try {
+                  await api("/api/reports", { method: "POST", body: { reason: r, reportedHandle: peer.handle, callId: peer.callId } });
+                  notify("Report sent. The call has ended.", "bad");
+                } catch (e) {
+                  notify(e.message, "bad");
+                }
+                onEnd(secs, true);
+              }}
               className={clsx("flex w-full items-center justify-between rounded-xl px-4 py-3 text-left text-sm", t.sunken, t.hover)}>
               {r} <ChevronRight size={15} />
             </button>
@@ -1266,15 +1367,22 @@ function PostCall({ t, peer, seconds, onSave, onAgain, onHome }) {
 
 function Training({ t, user, setUser, onBack, notify }) {
   const [i, setI] = useState(0);
-  const [done, setDone] = useState([]);
+  const [done, setDone] = useState(user.trainingDone || []);
   const lesson = TRAINING[i];
 
-  const mark = () => {
+  const mark = async () => {
     const next = done.includes(i) ? done : [...done, i];
     setDone(next);
+    try { await api("/api/account", { method: "PATCH", body: { trainingDone: next } }); } catch { /* best effort */ }
     if (i < TRAINING.length - 1) setI(i + 1);
     else if (next.length === TRAINING.length) {
-      setUser((u) => ({ ...u, trained: true }));
+      try {
+        const { account } = await api("/api/account", { method: "PATCH", body: { trained: true } });
+        setUser(account);
+      } catch (e) {
+        notify(e.message, "bad");
+        return;
+      }
       notify("Training complete. You can take calls now.");
     }
   };
@@ -1331,7 +1439,35 @@ function Training({ t, user, setUser, onBack, notify }) {
 
 /* -------------------------------- settings -------------------------------- */
 
-function Settings({ t, user, setUser, blocked, setBlocked, dark, setDark, onBack, onSignOut, notify }) {
+function Settings({ t, user, setUser, blocked, setBlocked, dark, setDark, onBack, onSignOut, onDeleted, notify }) {
+  const patch = async (fields) => {
+    setUser((u) => ({ ...u, ...fields }));
+    try {
+      const { account } = await api("/api/account", { method: "PATCH", body: fields });
+      setUser(account);
+    } catch (e) {
+      notify(e.message, "bad");
+    }
+  };
+
+  const unblock = async (handle) => {
+    setBlocked((v) => v.filter((x) => x !== handle));
+    try {
+      await api(`/api/blocked?handle=${encodeURIComponent(handle)}`, { method: "DELETE" });
+    } catch (e) {
+      notify(e.message, "bad");
+    }
+  };
+
+  const deleteAccount = async () => {
+    try {
+      await api("/api/account", { method: "DELETE" });
+      onDeleted();
+    } catch (e) {
+      notify(e.message, "bad");
+    }
+  };
+
   return (
     <div className="mx-auto max-w-2xl px-6 py-12">
       <button onClick={onBack} className={clsx("mb-8 inline-flex items-center gap-2 text-sm", t.faint)}>
@@ -1345,13 +1481,14 @@ function Settings({ t, user, setUser, blocked, setBlocked, dark, setDark, onBack
           <div className="mt-5 space-y-5">
             <Field t={t} label="Handle">
               <Input t={t} value={user.handle} maxLength={18}
-                onChange={(e) => setUser((u) => ({ ...u, handle: sanitize(e.target.value, 18) }))} />
+                onChange={(e) => setUser((u) => ({ ...u, handle: sanitize(e.target.value, 18) }))}
+                onBlur={(e) => patch({ handle: sanitize(e.target.value, 18) })} />
             </Field>
             <div>
               <p className="mb-2.5 text-sm font-medium">Language</p>
               <div className="flex flex-wrap gap-2">
                 {LANGUAGES.map((l) => (
-                  <Chip key={l} t={t} active={user.lang === l} onClick={() => setUser((u) => ({ ...u, lang: l }))}>{l}</Chip>
+                  <Chip key={l} t={t} active={user.lang === l} onClick={() => patch({ lang: l })}>{l}</Chip>
                 ))}
               </div>
             </div>
@@ -1367,7 +1504,7 @@ function Settings({ t, user, setUser, blocked, setBlocked, dark, setDark, onBack
               ["Show conversation prompts", "prompts"],
               ["Warn me at 45 minutes", "timeWarn"],
             ].map(([label, key]) => (
-              <button key={key} onClick={() => setUser((u) => ({ ...u, [key]: !u[key] }))}
+              <button key={key} onClick={() => patch({ [key]: !user[key] })}
                 className="flex w-full items-center justify-between gap-4 text-left">
                 <span className="text-sm">{label}</span>
                 <span className={clsx("relative h-6 w-11 shrink-0 rounded-full transition-colors", user[key] ? "bg-amber-300" : t.sunken)}>
@@ -1395,7 +1532,7 @@ function Settings({ t, user, setUser, blocked, setBlocked, dark, setDark, onBack
               {blocked.map((b) => (
                 <li key={b} className="flex items-center justify-between py-3 text-sm">
                   {b}
-                  <button onClick={() => setBlocked((v) => v.filter((x) => x !== b))}
+                  <button onClick={() => unblock(b)}
                     className="underline underline-offset-4">Unblock</button>
                 </li>
               ))}
@@ -1407,7 +1544,7 @@ function Settings({ t, user, setUser, blocked, setBlocked, dark, setDark, onBack
           <h2 className="font-serif text-xl">Account</h2>
           <div className="mt-4 flex flex-wrap gap-3">
             <Button _t={t} variant="ghost" onClick={onSignOut}><LogOut size={16} /> Sign out</Button>
-            <Button _t={t} variant="danger" onClick={() => notify("Account deletion runs on the server. See server/index.js.", "bad")}>
+            <Button _t={t} variant="danger" onClick={deleteAccount}>
               <Trash2 size={16} /> Delete account
             </Button>
           </div>
@@ -1432,16 +1569,18 @@ export default function App() {
   const [dark, setDark] = useState(true);
   const t = useTheme(dark);
 
+  const [checking, setChecking] = useState(true);
   const [screen, setScreen] = useState("landing");
-  const [accounts, setAccounts] = useState([]);
   const [user, setUser] = useState(null);
   const [draft, setDraft] = useState({ role: "", topics: [], mode: "voice", lang: "English", handle: "" });
+  const [listenerRequested, setListenerRequested] = useState(false);
 
   const [peer, setPeer] = useState(null);
   const [lastSeconds, setLastSeconds] = useState(0);
   const [sessions, setSessions] = useState([]);
   const [moods, setMoods] = useState([]);
   const [blocked, setBlocked] = useState([]);
+  const [presence, setPresence] = useState({ listenersOnline: null, medianWaitSeconds: null });
   const [safetyOpen, setSafetyOpen] = useState(false);
   const [toasts, setToasts] = useState([]);
 
@@ -1451,11 +1590,58 @@ export default function App() {
     setTimeout(() => setToasts((v) => v.filter((x) => x.id !== id)), 4500);
   }, []);
   const dismiss = (id) => setToasts((v) => v.filter((x) => x.id !== id));
-  const nav = (to) => setScreen(to);
+  const nav = useCallback((to) => setScreen(to), []);
+
+  /* Restore a signed-in session on load (the cookie survives a refresh
+     even though nothing else here does), and keep the landing page's
+     presence numbers current whether or not anyone's signed in. */
+  useEffect(() => {
+    (async () => {
+      try {
+        const { account } = await api("/api/auth/me");
+        if (account) { setUser(account); nav("home"); }
+      } catch { /* not signed in */ }
+      setChecking(false);
+    })();
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const p = await api("/api/presence");
+        if (!cancelled) setPresence(p);
+      } catch { /* leave the empty state showing */ }
+    };
+    load();
+    const i = setInterval(load, 20000);
+    return () => { cancelled = true; clearInterval(i); };
+  }, []);
+
+  /* Once signed in, pull in what's actually been persisted for this
+     account: past sessions, mood check-ins, and anyone blocked. */
+  useEffect(() => {
+    if (!user) { setSessions([]); setMoods([]); setBlocked([]); return; }
+    let cancelled = false;
+    (async () => {
+      try {
+        const [s, m, b] = await Promise.all([
+          api("/api/sessions"), api("/api/moods"), api("/api/blocked"),
+        ]);
+        if (cancelled) return;
+        setSessions(s.sessions);
+        setMoods(m.moods);
+        setBlocked(b.blocked);
+      } catch (e) {
+        if (!cancelled) notify(e.message, "bad");
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [user?.id, notify]);
 
   const handleAuthed = (acct, isNew) => {
     if (isNew) {
-      setDraft((d) => ({ ...d, email: acct.email, pw: acct.pw, handle: pick(HANDLES) }));
+      setDraft((d) => ({ ...d, email: acct.email, pw: acct.pw, age18: acct.age18, handle: pick(HANDLES) }));
       nav("onboarding");
     } else {
       setUser(acct);
@@ -1463,32 +1649,67 @@ export default function App() {
     }
   };
 
-  const finishOnboarding = () => {
-    const account = {
-      email: draft.email, pw: draft.pw, handle: draft.handle.trim(),
-      role: draft.role, topics: draft.topics, mode: draft.mode, lang: draft.lang,
-      trained: false, blurVideo: false, newListeners: true, prompts: true, timeWarn: true,
-    };
-    setAccounts((a) => [...a, account]);
-    setUser(account);
-    nav("home");
+  const finishOnboarding = async () => {
+    try {
+      const { account } = await api("/api/auth/signup", {
+        method: "POST",
+        body: {
+          email: draft.email, password: draft.pw, handle: draft.handle.trim(),
+          role: draft.role, topics: draft.topics, mode: draft.mode, lang: draft.lang,
+          age18: draft.age18,
+        },
+      });
+      setUser(account);
+      nav("home");
+    } catch (e) {
+      notify(e.message, "bad");
+      nav("auth");
+    }
   };
 
   const talkToAI = () => { setPeer(AI_PEER); nav("consent"); };
+  const takeCall = () => { setListenerRequested(true); nav("queue"); };
+  const matchHuman = () => { setListenerRequested(false); nav("queue"); };
+
+  const onMatched = useCallback(({ peer: matchedPeer, callId, mode }) => {
+    setPeer({ ...matchedPeer, callId, mode });
+    nav("consent");
+  }, [nav]);
 
   const endCall = (seconds, skipReview) => {
     setLastSeconds(seconds);
     nav(skipReview ? "home" : "postcall");
   };
 
-  const saveSession = ({ rating, kudos, note, blocked: b }, then) => {
-    setSessions((s) => [...s, {
-      id: Date.now(), peer: peer.handle, isAI: peer.kind === "ai",
-      mode: peer.kind === "ai" ? "text" : user.mode,
-      seconds: lastSeconds, rating, kudos, note,
-    }]);
-    if (b && !blocked.includes(peer.handle)) setBlocked((v) => [...v, peer.handle]);
+  const saveSession = async ({ rating, kudos, note, blocked: b }, then) => {
+    const mode = peer.kind === "ai" ? "text" : (peer.mode || user.mode);
+    try {
+      const { session } = await api("/api/sessions", {
+        method: "POST",
+        body: { peer: peer.handle, isAI: peer.kind === "ai", mode, seconds: lastSeconds, rating, kudos, note },
+      });
+      setSessions((s) => [...s, session]);
+      if (b && !blocked.includes(peer.handle)) {
+        await api("/api/blocked", { method: "POST", body: { handle: peer.handle } });
+        setBlocked((v) => [...v, peer.handle]);
+      }
+    } catch (e) {
+      notify(e.message, "bad");
+    }
     then();
+  };
+
+  const signOut = async () => {
+    try { await api("/api/auth/logout", { method: "POST" }); } catch { /* clear locally regardless */ }
+    setUser(null);
+    nav("landing");
+    notify("Signed out.");
+  };
+
+  const onDeleted = () => {
+    setUser(null);
+    nav("landing");
+    notify("Account deleted.");
   };
 
   return (
@@ -1520,34 +1741,47 @@ export default function App() {
       </header>
 
       <main>
-        {screen === "landing" && <Landing t={t} onStart={() => nav("auth")} onSafety={() => setSafetyOpen(true)} />}
-        {screen === "auth" && <Auth t={t} accounts={accounts} onAuthed={handleAuthed} notify={notify} onBack={() => nav("landing")} />}
-        {screen === "onboarding" && <Onboarding t={t} draft={draft} setDraft={setDraft} onDone={finishOnboarding} notify={notify} />}
-        {screen === "home" && user && (
-          <Home t={t} user={user} setUser={setUser} sessions={sessions} moods={moods}
-            onMood={(v) => setMoods((m) => [...m, { v, at: Date.now() }])}
-            onMatchHuman={() => nav("queue")} onTalkToAI={talkToAI}
-            onTraining={() => nav("training")} onSafety={() => setSafetyOpen(true)} notify={notify} />
-        )}
-        {screen === "queue" && user && (
-          <Queue t={t} user={user} onMatched={(p) => { setPeer(p); nav("consent"); }}
-            onCancel={() => nav("home")} onTalkToAI={talkToAI} />
-        )}
-        {screen === "consent" && user && peer && (
-          <Consent t={t} peer={peer} user={user} onAccept={() => nav("call")} onCancel={() => nav("home")} />
-        )}
-        {screen === "call" && user && peer && (
-          <Call t={t} user={user} peer={peer} onEnd={endCall} notify={notify} onSafety={() => setSafetyOpen(true)} />
-        )}
-        {screen === "postcall" && peer && (
-          <PostCall t={t} peer={peer} seconds={lastSeconds} onSave={saveSession}
-            onAgain={() => nav(peer.kind === "ai" ? "call" : "queue")} onHome={() => nav("home")} />
-        )}
-        {screen === "training" && user && <Training t={t} user={user} setUser={setUser} onBack={() => nav("home")} notify={notify} />}
-        {screen === "settings" && user && (
-          <Settings t={t} user={user} setUser={setUser} blocked={blocked} setBlocked={setBlocked}
-            dark={dark} setDark={setDark} onBack={() => nav("home")}
-            onSignOut={() => { setUser(null); nav("landing"); notify("Signed out."); }} notify={notify} />
+        {checking ? (
+          <div className="flex min-h-[60vh] items-center justify-center">
+            <Loader size={22} className={clsx("animate-spin", t.faint)} />
+          </div>
+        ) : (
+          <>
+            {screen === "landing" && <Landing t={t} onStart={() => nav("auth")} onSafety={() => setSafetyOpen(true)} presence={presence} />}
+            {screen === "auth" && <Auth t={t} onAuthed={handleAuthed} notify={notify} onBack={() => nav("landing")} />}
+            {screen === "onboarding" && <Onboarding t={t} draft={draft} setDraft={setDraft} onDone={finishOnboarding} notify={notify} />}
+            {screen === "home" && user && (
+              <Home t={t} user={user} setUser={setUser} sessions={sessions} moods={moods}
+                onMood={async (v) => {
+                  try {
+                    const { mood } = await api("/api/moods", { method: "POST", body: { v } });
+                    setMoods((m) => [...m, mood]);
+                  } catch (e) { notify(e.message, "bad"); }
+                }}
+                onMatchHuman={matchHuman} onTalkToAI={talkToAI} onTakeCall={takeCall}
+                onTraining={() => nav("training")} onSafety={() => setSafetyOpen(true)} presence={presence} notify={notify} />
+            )}
+            {screen === "queue" && user && (
+              <Queue t={t} user={user} role={listenerRequested ? "listener" : "seeker"} onMatched={onMatched}
+                onCancel={() => nav("home")} onTalkToAI={talkToAI} presence={presence} notify={notify} />
+            )}
+            {screen === "consent" && user && peer && (
+              <Consent t={t} peer={peer} user={user} onAccept={() => nav("call")} onCancel={() => nav("home")} />
+            )}
+            {screen === "call" && user && peer && (
+              <Call t={t} user={user} peer={peer} onEnd={endCall} notify={notify} onSafety={() => setSafetyOpen(true)} />
+            )}
+            {screen === "postcall" && peer && (
+              <PostCall t={t} peer={peer} seconds={lastSeconds} onSave={saveSession}
+                onAgain={() => nav(peer.kind === "ai" ? "call" : "queue")} onHome={() => nav("home")} />
+            )}
+            {screen === "training" && user && <Training t={t} user={user} setUser={setUser} onBack={() => nav("home")} notify={notify} />}
+            {screen === "settings" && user && (
+              <Settings t={t} user={user} setUser={setUser} blocked={blocked} setBlocked={setBlocked}
+                dark={dark} setDark={setDark} onBack={() => nav("home")}
+                onSignOut={signOut} onDeleted={onDeleted} notify={notify} />
+            )}
+          </>
         )}
       </main>
 
