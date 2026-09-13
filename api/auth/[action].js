@@ -1,0 +1,103 @@
+import crypto from 'node:crypto';
+import { ensureSchema, query } from '../_db.js';
+import {
+  hashPassword, verifyPassword, signSession, setSessionCookie, clearSessionCookie,
+  getSessionAccountId, requireAccount, toPublicAccount,
+} from '../_auth.js';
+import { EMAIL_RE, TOPICS, LANGUAGES, MODES, ROLES, sanitize, methodNotAllowed, badRequest, withErrors } from '../_util.js';
+
+/* One file covering /api/auth/signup, /login, /logout, /me — merged from
+   four separate functions to stay under Vercel Hobby's 12-function-per-
+   deployment cap. Vercel's [action] filename makes this a dynamic route;
+   req.query.action carries which one was requested. Each action's own
+   logic is unchanged from when it was its own file. */
+export default withErrors(async function handler(req, res) {
+  await ensureSchema();
+  const { action } = req.query;
+
+  if (action === 'signup') return signup(req, res);
+  if (action === 'login') return login(req, res);
+  if (action === 'logout') return logout(req, res);
+  if (action === 'me') return me(req, res);
+  return res.status(404).json({ error: 'Unknown auth action.' });
+});
+
+async function signup(req, res) {
+  if (req.method !== 'POST') return methodNotAllowed(res, ['POST']);
+
+  const body = req.body || {};
+  const email = sanitize(body.email, 254).trim().toLowerCase();
+  const password = String(body.password ?? '');
+  const handle = sanitize(body.handle, 18).trim();
+  const role = ROLES.includes(body.role) ? body.role : 'seeker';
+  const topics = Array.isArray(body.topics) ? body.topics.filter((t) => TOPICS.includes(t)) : [];
+  const mode = MODES.includes(body.mode) ? body.mode : 'voice';
+  const lang = LANGUAGES.includes(body.lang) ? body.lang : 'English';
+  const age18 = body.age18 === true;
+
+  if (!EMAIL_RE.test(email)) return badRequest(res, "That email address isn't complete.");
+  if (password.length < 12) return badRequest(res, 'Passwords need at least 12 characters.');
+  if (handle.length < 2) return badRequest(res, 'Pick a handle with at least 2 characters.');
+  if (!age18) return badRequest(res, "Confirm you're 18 or older to continue.");
+  if (topics.length === 0) return badRequest(res, 'Pick at least one topic.');
+
+  const existing = await query('SELECT id FROM accounts WHERE email = $1', [email]);
+  if (existing.rows.length) {
+    return badRequest(res, 'An account already uses that email. Sign in instead.');
+  }
+
+  const id = crypto.randomUUID();
+  const passwordHash = await hashPassword(password);
+  const { rows } = await query(
+    `INSERT INTO accounts (id, email, password_hash, handle, role, topics, mode, lang)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+     RETURNING *`,
+    [id, email, passwordHash, handle, role, topics, mode, lang]
+  );
+
+  setSessionCookie(req, res, signSession(id));
+  return res.status(201).json({ account: toPublicAccount(rows[0]) });
+}
+
+async function login(req, res) {
+  if (req.method !== 'POST') return methodNotAllowed(res, ['POST']);
+
+  const body = req.body || {};
+  const email = sanitize(body.email, 254).trim().toLowerCase();
+  const password = String(body.password ?? '');
+
+  if (!EMAIL_RE.test(email)) return badRequest(res, "That email address isn't complete.");
+
+  const { rows } = await query('SELECT * FROM accounts WHERE email = $1', [email]);
+  const account = rows[0];
+  /* Same error either way — confirming that an email exists lets an
+     attacker enumerate accounts. */
+  const ok = account && (await verifyPassword(password, account.password_hash));
+  if (!ok) return badRequest(res, "That email and password don't match.");
+
+  setSessionCookie(req, res, signSession(account.id));
+  return res.status(200).json({ account: toPublicAccount(account) });
+}
+
+async function logout(req, res) {
+  if (req.method !== 'POST') return methodNotAllowed(res, ['POST']);
+
+  /* Best-effort: also drop this account out of the matching queue so a
+     listener who closes the tab instead of clicking "stop" doesn't stay
+     "available" forever. */
+  const id = getSessionAccountId(req);
+  if (id) {
+    await query('DELETE FROM queue WHERE account_id = $1', [id]).catch(() => {});
+  }
+
+  clearSessionCookie(req, res);
+  return res.status(200).json({ ok: true });
+}
+
+async function me(req, res) {
+  if (req.method !== 'GET') return methodNotAllowed(res, ['GET']);
+
+  const account = await requireAccount(req);
+  if (!account) return res.status(200).json({ account: null });
+  return res.status(200).json({ account: toPublicAccount(account) });
+}
