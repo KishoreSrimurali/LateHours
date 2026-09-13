@@ -7,6 +7,7 @@ import {
   Sparkles, UserCheck, Trash2, Phone, Bot, Loader
 } from "lucide-react";
 import Pusher from "pusher-js";
+import { TOPICS, LANGUAGES } from "./shared/constants.js";
 
 /* ------------------------------------------------------------------ *
  *  Late Hours — anonymous peer support
@@ -26,13 +27,6 @@ import Pusher from "pusher-js";
 const CHAT_ENDPOINT = "/api/listener";
 const CHAT_MODEL = "gpt-4o-mini";
 
-const TOPICS = [
-  "Anxiety", "Low mood", "Loneliness", "Work stress", "Grief",
-  "Relationships", "Family", "Sleep", "Burnout", "Health worry",
-  "Money", "Identity", "Studies", "Parenting", "Recovery",
-];
-
-const LANGUAGES = ["English", "Arabic", "Hindi", "Urdu", "Spanish", "French", "Swahili", "Tagalog"];
 const HANDLES = ["Willow", "Ash", "Juniper", "Wren", "Sage", "Rook", "Linden", "Marlow", "Vesper", "Bramble"];
 
 const PROMPTS = [
@@ -1021,10 +1015,16 @@ function Breathing({ t, onClose }) {
 
 function Call({ t, user, peer, onEnd, notify, onSafety }) {
   const isAI = peer.kind === "ai";
+  /* For a human call, the mode that matters is the one the match actually
+     negotiated (peer.mode, set from the /api/queue response) — not this
+     browser's own stored preference, which can differ from whichever
+     side's request happened to complete the match. Two people matched
+     into the same call must render the same call. */
+  const mode = isAI ? user.mode : (peer.mode || user.mode);
   const [secs, setSecs] = useState(0);
   const [muted, setMuted] = useState(false);
-  const [camOn, setCamOn] = useState(user.mode === "video" && !isAI);
-  const [chatOpen, setChatOpen] = useState(isAI || user.mode === "text");
+  const [camOn, setCamOn] = useState(mode === "video" && !isAI);
+  const [chatOpen, setChatOpen] = useState(isAI || mode === "text");
   const [msgs, setMsgs] = useState([]);
   const [draft, setDraft] = useState("");
   const [thinking, setThinking] = useState(false);
@@ -1041,8 +1041,8 @@ function Call({ t, user, peer, onEnd, notify, onSafety }) {
   const recogRef = useRef(null);
   const callChannelRef = useRef(null);
 
-  const useVideo = user.mode === "video" && !isAI;
-  const useAudioDevice = !isAI && user.mode !== "text";
+  const useVideo = mode === "video" && !isAI;
+  const useAudioDevice = !isAI && mode !== "text";
 
   /* real camera / mic — only for human calls */
   useEffect(() => {
@@ -1450,10 +1450,10 @@ function Settings({ t, user, setUser, blocked, setBlocked, dark, setDark, onBack
     }
   };
 
-  const unblock = async (handle) => {
-    setBlocked((v) => v.filter((x) => x !== handle));
+  const unblock = async (accountId) => {
+    setBlocked((v) => v.filter((x) => x.accountId !== accountId));
     try {
-      await api(`/api/blocked?handle=${encodeURIComponent(handle)}`, { method: "DELETE" });
+      await api(`/api/blocked?accountId=${encodeURIComponent(accountId)}`, { method: "DELETE" });
     } catch (e) {
       notify(e.message, "bad");
     }
@@ -1530,9 +1530,9 @@ function Settings({ t, user, setUser, blocked, setBlocked, dark, setDark, onBack
           ) : (
             <ul className={clsx("mt-4 divide-y", t.border)}>
               {blocked.map((b) => (
-                <li key={b} className="flex items-center justify-between py-3 text-sm">
-                  {b}
-                  <button onClick={() => unblock(b)}
+                <li key={b.accountId} className="flex items-center justify-between py-3 text-sm">
+                  {b.handle}
+                  <button onClick={() => unblock(b.accountId)}
                     className="underline underline-offset-4">Unblock</button>
                 </li>
               ))}
@@ -1689,9 +1689,9 @@ export default function App() {
         body: { peer: peer.handle, isAI: peer.kind === "ai", mode, seconds: lastSeconds, rating, kudos, note },
       });
       setSessions((s) => [...s, session]);
-      if (b && !blocked.includes(peer.handle)) {
-        await api("/api/blocked", { method: "POST", body: { handle: peer.handle } });
-        setBlocked((v) => [...v, peer.handle]);
+      if (b && peer.id && !blocked.some((x) => x.accountId === peer.id)) {
+        await api("/api/blocked", { method: "POST", body: { accountId: peer.id, handle: peer.handle } });
+        setBlocked((v) => [...v, { accountId: peer.id, handle: peer.handle }]);
       }
     } catch (e) {
       notify(e.message, "bad");

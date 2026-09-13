@@ -42,12 +42,20 @@ export async function getClient() {
    concurrent invocations on the same instance don't race), then never
    again for the life of the instance. Ids are app-generated (crypto.randomUUID)
    rather than a Postgres UUID type, so no extension needs to be enabled on
-   whichever provider DATABASE_URL points at. */
+   whichever provider DATABASE_URL points at.
+
+   A failed attempt is NOT cached: it's only recorded as done once every
+   statement below has actually succeeded. Concurrent calls that land
+   while an attempt is in flight share that one attempt (the point of
+   caching in the first place); a later call that arrives after a failed
+   attempt gets to retry from scratch, rather than every request on this
+   warm instance replaying the same stale rejection until Vercel happens
+   to recycle the container. */
 let migrated = globalThis.__lateHoursMigrated || null;
 
 export async function ensureSchema() {
   if (migrated) return migrated;
-  migrated = (async () => {
+  const attempt = (async () => {
     await query(`
       CREATE TABLE IF NOT EXISTS accounts (
         id TEXT PRIMARY KEY,
@@ -89,12 +97,18 @@ export async function ensureSchema() {
         created_at TIMESTAMPTZ NOT NULL DEFAULT now()
       );
     `);
+    /* Keyed on the blocked account's stable id, not their handle — a handle
+       can be changed any time from Settings, and a block that stopped
+       working the moment someone renamed themselves wouldn't be much of a
+       block. blocked_handle is kept only as a label for the "Blocked" list
+       in Settings; matching logic never reads it. */
     await query(`
       CREATE TABLE IF NOT EXISTS blocked (
         account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+        blocked_account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
         blocked_handle TEXT NOT NULL,
         created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-        PRIMARY KEY (account_id, blocked_handle)
+        PRIMARY KEY (account_id, blocked_account_id)
       );
     `);
     await query(`
@@ -134,7 +148,15 @@ export async function ensureSchema() {
         created_at TIMESTAMPTZ NOT NULL DEFAULT now()
       );
     `);
-    globalThis.__lateHoursMigrated = migrated;
   })();
-  return migrated;
+
+  migrated = attempt;
+  try {
+    await attempt;
+    globalThis.__lateHoursMigrated = attempt;
+    return attempt;
+  } catch (err) {
+    migrated = null;
+    throw err;
+  }
 }

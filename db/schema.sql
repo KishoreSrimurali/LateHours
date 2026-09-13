@@ -44,11 +44,15 @@ CREATE TABLE IF NOT EXISTS sessions_log (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- Keyed on the blocked account's stable id, not their (changeable) handle.
+-- blocked_handle is only a display label for the "Blocked" list in
+-- Settings — matching logic never reads it.
 CREATE TABLE IF NOT EXISTS blocked (
   account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  blocked_account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
   blocked_handle TEXT NOT NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  PRIMARY KEY (account_id, blocked_handle)
+  PRIMARY KEY (account_id, blocked_account_id)
 );
 
 CREATE TABLE IF NOT EXISTS reports (

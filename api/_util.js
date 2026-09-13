@@ -3,14 +3,10 @@
 
 export const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
 
-export const TOPICS = [
-  'Anxiety', 'Low mood', 'Loneliness', 'Work stress', 'Grief',
-  'Relationships', 'Family', 'Sleep', 'Burnout', 'Health worry',
-  'Money', 'Identity', 'Studies', 'Parenting', 'Recovery',
-];
-export const LANGUAGES = ['English', 'Arabic', 'Hindi', 'Urdu', 'Spanish', 'French', 'Swahili', 'Tagalog'];
-export const MODES = ['voice', 'video', 'text'];
-export const ROLES = ['seeker', 'listener', 'both'];
+/* Re-exported here (rather than importing ../shared/constants.js directly
+   in every handler) so every existing `import { TOPICS } from './_util.js'`
+   keeps working unchanged. */
+export { TOPICS, LANGUAGES, MODES, ROLES } from '../shared/constants.js';
 
 /* Same rule the client applies before anything is stored or shown back to
    another person — belt and braces, since a request can always skip the
