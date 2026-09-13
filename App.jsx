@@ -19,13 +19,13 @@ import { TOPICS, LANGUAGES } from "./shared/constants.js";
  *  matches recorded, nobody online) is shown as an empty state rather
  *  than an invented number.
  *
- *  The AI listener is a real OpenAI API call. The browser calls the
- *  same-origin /api/listener Vercel function so the OpenAI key stays
+ *  The AI listener is a real Gemini API call. The browser calls the
+ *  same-origin /api/listener Vercel function so the Gemini key stays
  *  server-side.
  * ------------------------------------------------------------------ */
 
 const CHAT_ENDPOINT = "/api/listener";
-const CHAT_MODEL = "gpt-4o-mini";
+const CHAT_MODEL = "gemini-2.0-flash";
 
 const HANDLES = ["Willow", "Ash", "Juniper", "Wren", "Sage", "Rook", "Linden", "Marlow", "Vesper", "Bramble"];
 
@@ -132,13 +132,22 @@ function getPusherClient() {
 }
 
 async function askListener(history) {
+  /* The AI's opening line is shown locally before anyone's spoken a word
+     — it isn't a real model turn, so it shouldn't be resent as if it
+     were. Several providers (this one included) expect the first turn in
+     a conversation to be the user's; starting the history with that
+     canned greeting instead is both wasted tokens and, for some
+     providers, a hard error. */
+  const start = history.findIndex((m) => m.who === "me");
+  const real = start === -1 ? history : history.slice(start);
+
   const data = await api(CHAT_ENDPOINT, {
     method: "POST",
     body: {
       model: CHAT_MODEL,
       max_tokens: 1000,
       system: AI_SYSTEM,
-      messages: history.map((m) => ({
+      messages: real.map((m) => ({
         role: m.who === "me" ? "user" : "assistant",
         content: m.text,
       })),

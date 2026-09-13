@@ -23,8 +23,8 @@ real-time matching and in-call chat.
   messages as Pusher client events (no extra server round trip per
   message). `api/pusher-auth.js` signs the subscription; the wiring lives
   in the `Call` component in `App.jsx`.
-- **The AI listener** — a real OpenAI API call, proxied through
-  `api/listener.js` so the OpenAI key never reaches the browser, and now
+- **The AI listener** — a real Gemini API call, proxied through
+  `api/listener.js` so the Gemini key never reaches the browser, and now
   requires a signed-in session.
 - **Reports** — go into a `reports` table for a moderator to read; the
   reported person is never told who filed it.
