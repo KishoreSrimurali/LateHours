@@ -1144,7 +1144,7 @@ function Call({ t, user, peer, onEnd, notify, onSafety }) {
       setMsgs((m) => [...m, { id: Date.now() + 1, who: "peer", text: reply }]);
       speak(reply);
     } catch (e) {
-      setMsgs((m) => [...m, { id: Date.now() + 1, who: "system", text: "The listener didn't respond. Check your connection and send that again." }]);
+      setMsgs((m) => [...m, { id: Date.now() + 1, who: "system", text: `The listener didn't respond: ${e.message}` }]);
     } finally {
       setThinking(false);
     }
