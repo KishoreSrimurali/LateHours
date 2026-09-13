@@ -3,8 +3,8 @@ import {
   Mic, MicOff, Video, VideoOff, PhoneOff, MessageSquare, Send, Shield,
   Heart, AlertTriangle, X, Check, ChevronRight, ChevronLeft, Settings as Cog,
   LogOut, Users, Search, Wind, Flag, SkipForward, Star, Clock, Award,
-  BookOpen, Eye, EyeOff, Sun, Moon, ArrowLeft, Ban, Volume2, VolumeX,
-  Sparkles, UserCheck, Trash2, Phone, Bot, Loader
+  BookOpen, Eye, EyeOff, Sun, Moon, ArrowLeft, Ban, Volume2,
+  Sparkles, UserCheck, Trash2, Phone, Loader
 } from "lucide-react";
 import Pusher from "pusher-js";
 import { TOPICS, LANGUAGES } from "./shared/constants.js";
@@ -19,13 +19,9 @@ import { TOPICS, LANGUAGES } from "./shared/constants.js";
  *  matches recorded, nobody online) is shown as an empty state rather
  *  than an invented number.
  *
- *  The AI listener is a real Gemini API call. The browser calls the
- *  same-origin /api/listener Vercel function so the Gemini key stays
- *  server-side.
+ *  Every conversation here is with a real, matched human listener —
+ *  there is no AI listener option.
  * ------------------------------------------------------------------ */
-
-const CHAT_ENDPOINT = "/api/listener";
-const CHAT_MODEL = "gemini-2.0-flash";
 
 const HANDLES = ["Willow", "Ash", "Juniper", "Wren", "Sage", "Rook", "Linden", "Marlow", "Vesper", "Bramble"];
 
@@ -54,24 +50,6 @@ const TRAINING = [
 ];
 
 const KUDOS = ["Really listened", "Didn't rush me", "Felt understood", "Kind", "Asked good questions", "Stayed calm"];
-
-const AI_SYSTEM = `You are a listener on Late Hours, a peer support service. You are an AI and the interface says so plainly — never claim or imply you are human, and never invent a personal history, feelings you don't have, or experiences of your own.
-
-How to talk:
-- Short. Two or three sentences, usually. This is a conversation, not an essay.
-- Warm and plain. No therapy jargon, no "I hear that you're feeling", no bullet points, no headings.
-- Ask more than you tell. One question at a time, and only when it opens something up.
-- Don't rush to solutions. If someone is describing a hard thing, stay in it with them before suggesting anything. Advice offered too fast reads as "please stop talking".
-- Let them lead. If they want to sit with something, sit with it.
-- Reflect in your own words rather than repeating theirs back.
-
-Hard limits:
-- You are not a therapist. Do not diagnose, do not name conditions they might have, do not discuss medication, dosages, or treatment plans.
-- If someone describes thoughts of suicide or self-harm, harm to another person, or abuse: respond with care, take it seriously, don't panic or lecture, and gently point them toward a crisis line or emergency services. Do not discuss methods or means in any form.
-- Don't give medical, legal, or financial instructions.
-- If a question needs a professional, say so plainly and kindly instead of guessing.
-
-You are the person who picks up at 2am. Be that, and nothing more than that.`;
 
 /* ---------------------------------- utils --------------------------------- */
 
@@ -129,35 +107,6 @@ function getPusherClient() {
     });
   }
   return pusherClient;
-}
-
-async function askListener(history) {
-  /* The AI's opening line is shown locally before anyone's spoken a word
-     — it isn't a real model turn, so it shouldn't be resent as if it
-     were. Several providers (this one included) expect the first turn in
-     a conversation to be the user's; starting the history with that
-     canned greeting instead is both wasted tokens and, for some
-     providers, a hard error. */
-  const start = history.findIndex((m) => m.who === "me");
-  const real = start === -1 ? history : history.slice(start);
-
-  const data = await api(CHAT_ENDPOINT, {
-    method: "POST",
-    body: {
-      model: CHAT_MODEL,
-      max_tokens: 1000,
-      system: AI_SYSTEM,
-      messages: real.map((m) => ({
-        role: m.who === "me" ? "user" : "assistant",
-        content: m.text,
-      })),
-    },
-  });
-  return data.content
-    .map((c) => (c.type === "text" ? c.text : ""))
-    .filter(Boolean)
-    .join("\n")
-    .trim();
 }
 
 /* ---------------------------------- logo ---------------------------------- */
@@ -359,7 +308,7 @@ function Landing({ t, onStart, onSafety, presence }) {
             <div className="grid gap-8 sm:grid-cols-3">
               {[
                 ["Nobody learns your name", "You pick a handle. Accounts hold preferences, not transcripts."],
-                ["A human or an AI, your choice", "The AI listener is labelled as one everywhere it appears. It will never pretend otherwise."],
+                ["Always a real person", "Every listener is a trained peer — never software pretending to be one."],
                 ["You can leave mid-sentence", "Skip, mute, or end at any point. No one is told why."],
               ].map(([h, b]) => (
                 <div key={h}>
@@ -387,8 +336,8 @@ function Landing({ t, onStart, onSafety, presence }) {
           <div className={clsx("mt-6 rounded-2xl border p-5", t.surface, t.border)}>
             <p className="text-sm leading-relaxed">
               Late Hours isn't a substitute for professional care. Human listeners are trained peers,
-              not clinicians, and the AI listener can't diagnose or treat anything. If you're in
-              danger, contact your local emergency number.
+              not clinicians, and can't diagnose or treat anything. If you're in danger, contact your
+              local emergency number.
             </p>
             <button onClick={onSafety} className="mt-3 text-sm font-medium underline underline-offset-4">
               See crisis lines by country
@@ -501,8 +450,7 @@ function Auth({ t, onAuthed, notify, onBack }) {
               {age && <Check size={13} strokeWidth={3} />}
             </span>
             <span className={clsx("text-sm leading-relaxed", t.muted)}>
-              I'm 18 or older. I understand human listeners are trained peers and the AI listener is
-              software — neither is a licensed therapist.
+              I'm 18 or older. I understand listeners are trained peers, not licensed therapists.
             </span>
           </button>
         )}
@@ -651,7 +599,7 @@ function Onboarding({ t, draft, setDraft, onDone, notify }) {
 
 /* ---------------------------------- home ---------------------------------- */
 
-function Home({ t, user, setUser, sessions, moods, onMood, onMatchHuman, onTalkToAI, onTakeCall, onTraining, onSafety, presence, notify }) {
+function Home({ t, user, setUser, sessions, moods, onMood, onMatchHuman, onTakeCall, onTraining, onSafety, presence, notify }) {
   const totalMin = sessions.reduce((a, s) => a + Math.round(s.seconds / 60), 0);
   const rated = sessions.filter((s) => s.rating > 0);
   const avg = rated.length ? (rated.reduce((a, s) => a + s.rating, 0) / rated.length).toFixed(1) : null;
@@ -713,9 +661,6 @@ function Home({ t, user, setUser, sessions, moods, onMood, onMatchHuman, onTalkT
           <div className="mt-7 flex flex-wrap gap-3">
             <Button _t={t} size="lg" onClick={onMatchHuman} disabled={user.topics.length === 0}>
               <Search size={16} /> Find a human listener
-            </Button>
-            <Button _t={t} size="lg" variant="ghost" onClick={onTalkToAI}>
-              <Bot size={16} /> Talk to the AI listener
             </Button>
           </div>
           {user.topics.length === 0 && (
@@ -784,7 +729,6 @@ function Home({ t, user, setUser, sessions, moods, onMood, onMatchHuman, onTalkT
                 <li key={s.id} className="flex items-start justify-between gap-4 py-3.5">
                   <div className="min-w-0">
                     <p className="flex items-center gap-2 text-sm font-medium">
-                      {s.isAI && <Bot size={14} className="shrink-0" />}
                       {s.peer} · {s.mode === "video" ? "Video" : s.mode === "text" ? "Text" : "Voice"} · {fmtTime(s.seconds)}
                     </p>
                     {s.note && <p className={clsx("mt-1 truncate text-sm", t.faint)}>{s.note}</p>}
@@ -820,8 +764,8 @@ function Home({ t, user, setUser, sessions, moods, onMood, onMatchHuman, onTalkT
             </button>
           </div>
           <p className={clsx("mt-5 text-sm leading-relaxed", t.faint)}>
-            Human listeners are peers who completed a short course. The AI listener is software. Neither
-            can diagnose, prescribe, or provide treatment.
+            Human listeners are peers who completed a short course. They can't diagnose, prescribe, or
+            provide treatment.
           </p>
         </div>
       </div>
@@ -835,7 +779,7 @@ function Home({ t, user, setUser, sessions, moods, onMood, onMatchHuman, onTalkT
    take one. Either way this joins the real /api/queue row, then either
    gets matched inline (the other side was already waiting) or sits on a
    private Pusher channel until a later join matches it. */
-function Queue({ t, user, role = "seeker", onMatched, onCancel, onTalkToAI, presence, notify }) {
+function Queue({ t, user, role = "seeker", onMatched, onCancel, presence, notify }) {
   const [secs, setSecs] = useState(0);
   const [err, setErr] = useState("");
   const reduced = useReducedMotion();
@@ -910,11 +854,10 @@ function Queue({ t, user, role = "seeker", onMatched, onCancel, onTalkToAI, pres
       </p>
       {role === "seeker" && presence?.listenersOnline === 0 && (
         <p className={clsx("mt-4 text-sm leading-relaxed", t.muted)}>
-          Nobody's online right now — you can keep waiting, or talk to the AI listener instead.
+          Nobody's online right now — you can keep waiting, and you'll be matched the moment someone is.
         </p>
       )}
       <div className="mt-8 flex flex-wrap justify-center gap-3">
-        {role === "seeker" && <Button _t={t} onClick={onTalkToAI}><Bot size={16} /> Talk to the AI listener</Button>}
         <Button _t={t} variant="quiet" onClick={onCancel}>Cancel</Button>
       </div>
     </div>
@@ -924,41 +867,26 @@ function Queue({ t, user, role = "seeker", onMatched, onCancel, onTalkToAI, pres
 /* -------------------------------- consent --------------------------------- */
 
 function Consent({ t, peer, user, onAccept, onCancel }) {
-  const isAI = peer.kind === "ai";
-  const rules = isAI
-    ? [
-        "I understand I'm talking to an AI, not a person.",
-        "I understand it can't diagnose, prescribe, or handle an emergency.",
-        "If I'm in danger I'll contact a crisis line or emergency services instead.",
-      ]
-    : [
-        "I won't record, screenshot, or share anything from this call.",
-        "I understand my listener is a trained peer, not a licensed therapist.",
-        "If either of us is in danger, we'll stop and contact emergency services.",
-      ];
+  const rules = [
+    "I won't record, screenshot, or share anything from this call.",
+    "I understand my listener is a trained peer, not a licensed therapist.",
+    "If either of us is in danger, we'll stop and contact emergency services.",
+  ];
   const [agreed, setAgreed] = useState([false, false, false]);
   const all = agreed.every(Boolean);
 
   return (
     <div className="mx-auto max-w-lg px-6 py-12">
-      <p className={clsx("text-sm", t.faint)}>{isAI ? "Before you start" : "Matched"}</p>
-      <h1 className="mt-2 font-serif text-3xl leading-tight">
-        {isAI ? "You're about to talk to software." : `${peer.handle} is ready when you are.`}
-      </h1>
+      <p className={clsx("text-sm", t.faint)}>Matched</p>
+      <h1 className="mt-2 font-serif text-3xl leading-tight">{peer.handle} is ready when you are.</h1>
 
       <div className={clsx("mt-6 rounded-2xl border p-5", t.surface, t.border)}>
         <div className="flex items-start gap-4">
           <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-amber-200 text-indigo-950">
-            {isAI ? <Bot size={22} /> : <span className="font-serif text-lg">{peer.handle[0]}</span>}
+            <span className="font-serif text-lg">{peer.handle[0]}</span>
           </div>
           <div className="min-w-0">
             <p className="text-sm leading-relaxed">{peer.blurb}</p>
-            {isAI && (
-              <p className={clsx("mt-2 text-sm leading-relaxed", t.faint)}>
-                It's available immediately, it won't get tired of you, and it will never claim to be a
-                person. It also doesn't remember you after you close the call.
-              </p>
-            )}
           </div>
         </div>
       </div>
@@ -979,7 +907,7 @@ function Consent({ t, peer, user, onAccept, onCancel }) {
 
       <div className="mt-8 flex flex-wrap gap-3">
         <Button _t={t} size="lg" disabled={!all} onClick={onAccept}>
-          {isAI ? <MessageSquare size={16} /> : user.mode === "video" ? <Video size={16} /> : <Phone size={16} />} Start
+          {user.mode === "video" ? <Video size={16} /> : <Phone size={16} />} Start
         </Button>
         <Button _t={t} size="lg" variant="ghost" onClick={onCancel}>Not now</Button>
       </div>
@@ -1023,25 +951,22 @@ function Breathing({ t, onClose }) {
 /* ---------------------------------- call ---------------------------------- */
 
 function Call({ t, user, peer, onEnd, notify, onSafety }) {
-  const isAI = peer.kind === "ai";
-  /* For a human call, the mode that matters is the one the match actually
-     negotiated (peer.mode, set from the /api/queue response) — not this
-     browser's own stored preference, which can differ from whichever
-     side's request happened to complete the match. Two people matched
-     into the same call must render the same call. */
-  const mode = isAI ? user.mode : (peer.mode || user.mode);
+  /* The mode that matters is the one the match actually negotiated
+     (peer.mode, set from the /api/queue response) — not this browser's
+     own stored preference, which can differ from whichever side's
+     request happened to complete the match. Two people matched into the
+     same call must render the same call. */
+  const mode = peer.mode || user.mode;
   const [secs, setSecs] = useState(0);
   const [muted, setMuted] = useState(false);
-  const [camOn, setCamOn] = useState(mode === "video" && !isAI);
-  const [chatOpen, setChatOpen] = useState(isAI || mode === "text");
+  const [camOn, setCamOn] = useState(mode === "video");
+  const [chatOpen, setChatOpen] = useState(mode === "text");
   const [msgs, setMsgs] = useState([]);
   const [draft, setDraft] = useState("");
-  const [thinking, setThinking] = useState(false);
   const [breathe, setBreathe] = useState(false);
   const [reportOpen, setReportOpen] = useState(false);
   const [camError, setCamError] = useState(false);
   const [prompt, setPrompt] = useState(null);
-  const [speakReplies, setSpeakReplies] = useState(false);
   const [listening, setListening] = useState(false);
 
   const videoRef = useRef(null);
@@ -1050,10 +975,9 @@ function Call({ t, user, peer, onEnd, notify, onSafety }) {
   const recogRef = useRef(null);
   const callChannelRef = useRef(null);
 
-  const useVideo = mode === "video" && !isAI;
-  const useAudioDevice = !isAI && mode !== "text";
+  const useVideo = mode === "video";
+  const useAudioDevice = mode !== "text";
 
-  /* real camera / mic — only for human calls */
   useEffect(() => {
     if (!useAudioDevice && !useVideo) return;
     let cancelled = false;
@@ -1081,22 +1005,16 @@ function Call({ t, user, peer, onEnd, notify, onSafety }) {
     return () => clearInterval(i);
   }, []);
 
-  useEffect(() => { chatEndRef.current?.scrollIntoView({ block: "nearest" }); }, [msgs, thinking, chatOpen]);
+  useEffect(() => { chatEndRef.current?.scrollIntoView({ block: "nearest" }); }, [msgs, chatOpen]);
 
-  /* opening line from the AI */
+  /* Messages travel over a private Pusher channel scoped to this one call
+     — /api/pusher-auth only signs it for the two accounts the /api/queue
+     match created it for. Pusher's own "client events" carry the text
+     directly between the two browsers without another server round trip;
+     the channel must have client events enabled in the Pusher dashboard
+     for that app. */
   useEffect(() => {
-    if (!isAI || msgs.length) return;
-    setMsgs([{ id: 1, who: "peer", text: "I'm here. Start wherever you want — it doesn't have to make sense yet." }]);
-  }, [isAI, msgs.length]);
-
-  /* For a human call, messages travel over a private Pusher channel scoped
-     to this one call — /api/pusher-auth only signs it for the two accounts
-     the /api/queue match created it for. Pusher's own "client events" carry
-     the text directly between the two browsers without another server
-     round trip; the channel must have client events enabled in the Pusher
-     dashboard for that app. */
-  useEffect(() => {
-    if (isAI || !peer.callId) return;
+    if (!peer.callId) return;
     const client = getPusherClient();
     if (!client) return;
     const channel = client.subscribe(`private-call-${peer.callId}`);
@@ -1108,17 +1026,7 @@ function Call({ t, user, peer, onEnd, notify, onSafety }) {
       client.unsubscribe(`private-call-${peer.callId}`);
       callChannelRef.current = null;
     };
-  }, [isAI, peer.callId]);
-
-  /* real browser speech synthesis, not a simulation */
-  const speak = useCallback((text) => {
-    if (!speakReplies || typeof window === "undefined" || !window.speechSynthesis) return;
-    window.speechSynthesis.cancel();
-    const u = new SpeechSynthesisUtterance(text);
-    u.rate = 0.95;
-    u.pitch = 1;
-    window.speechSynthesis.speak(u);
-  }, [speakReplies]);
+  }, [peer.callId]);
 
   /* real browser speech recognition where supported */
   const toggleDictation = () => {
@@ -1136,27 +1044,12 @@ function Call({ t, user, peer, onEnd, notify, onSafety }) {
     setListening(true);
   };
 
-  const send = async () => {
+  const send = () => {
     const text = sanitize(draft.trim(), 2000);
-    if (!text || thinking) return;
-    const next = [...msgs, { id: Date.now(), who: "me", text }];
-    setMsgs(next);
+    if (!text) return;
+    setMsgs((m) => [...m, { id: Date.now(), who: "me", text }]);
     setDraft("");
-    if (!isAI) {
-      callChannelRef.current?.trigger("client-message", { text });
-      return;
-    }
-
-    setThinking(true);
-    try {
-      const reply = await askListener(next);
-      setMsgs((m) => [...m, { id: Date.now() + 1, who: "peer", text: reply }]);
-      speak(reply);
-    } catch (e) {
-      setMsgs((m) => [...m, { id: Date.now() + 1, who: "system", text: `The listener didn't respond: ${e.message}` }]);
-    } finally {
-      setThinking(false);
-    }
+    callChannelRef.current?.trigger("client-message", { text });
   };
 
   const Tile = ({ label, self }) => (
@@ -1179,39 +1072,31 @@ function Call({ t, user, peer, onEnd, notify, onSafety }) {
     <div className="relative mx-auto max-w-6xl px-4 py-6 sm:px-6">
       <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-2.5">
-          {isAI ? (
-            <span className="inline-flex items-center gap-1.5 rounded-full bg-amber-200 px-2.5 py-1 text-xs font-medium text-indigo-950">
-              <Bot size={12} /> AI listener
-            </span>
-          ) : (
-            <span className="h-2 w-2 rounded-full bg-emerald-300" />
-          )}
+          <span className="h-2 w-2 rounded-full bg-emerald-300" />
           <p className="text-sm">{peer.handle} · <span className={t.faint}>{fmtTime(secs)}</span></p>
         </div>
         <div className="flex items-center gap-2">
           <Button _t={t} size="sm" variant="ghost" onClick={onSafety}><Shield size={14} /> Crisis lines</Button>
-          {!isAI && <Button _t={t} size="sm" variant="ghost" onClick={() => setReportOpen(true)}><Flag size={14} /> Report</Button>}
+          <Button _t={t} size="sm" variant="ghost" onClick={() => setReportOpen(true)}><Flag size={14} /> Report</Button>
         </div>
       </div>
 
       <div className="grid gap-5 lg:grid-cols-3">
-        {!isAI && (
-          <div className={clsx("relative", chatOpen ? "lg:col-span-2" : "lg:col-span-3")}>
-            <div className={clsx("grid gap-4", useVideo ? "sm:grid-cols-2" : "")}>
-              <Tile label={peer.handle} />
-              {useVideo && <Tile label={user.handle} self />}
-            </div>
-            {breathe && <Breathing t={t} onClose={() => setBreathe(false)} />}
-            {prompt && (
-              <div className={clsx("mt-4 flex items-start justify-between gap-4 rounded-2xl border p-4", t.surface, t.border)}>
-                <p className="font-serif text-lg leading-snug">{prompt}</p>
-                <button onClick={() => setPrompt(null)} className={clsx("rounded-full p-1", t.hover)}><X size={16} /></button>
-              </div>
-            )}
+        <div className={clsx("relative", chatOpen ? "lg:col-span-2" : "lg:col-span-3")}>
+          <div className={clsx("grid gap-4", useVideo ? "sm:grid-cols-2" : "")}>
+            <Tile label={peer.handle} />
+            {useVideo && <Tile label={user.handle} self />}
           </div>
-        )}
+          {breathe && <Breathing t={t} onClose={() => setBreathe(false)} />}
+          {prompt && (
+            <div className={clsx("mt-4 flex items-start justify-between gap-4 rounded-2xl border p-4", t.surface, t.border)}>
+              <p className="font-serif text-lg leading-snug">{prompt}</p>
+              <button onClick={() => setPrompt(null)} className={clsx("rounded-full p-1", t.hover)}><X size={16} /></button>
+            </div>
+          )}
+        </div>
 
-        <div className={clsx("relative flex flex-col rounded-3xl border", isAI ? "lg:col-span-3 h-[30rem]" : "h-[26rem] lg:h-auto", t.surface, t.border, !chatOpen && "hidden")}>
+        <div className={clsx("relative flex flex-col rounded-3xl border h-[26rem] lg:h-auto", t.surface, t.border, !chatOpen && "hidden")}>
           <div className="flex-1 space-y-3 overflow-y-auto p-4">
             {msgs.map((m) => (
               <div key={m.id} className={clsx("flex", m.who === "me" ? "justify-end" : "justify-start")}>
@@ -1222,13 +1107,6 @@ function Call({ t, user, peer, onEnd, notify, onSafety }) {
                 </p>
               </div>
             ))}
-            {thinking && (
-              <div className="flex justify-start">
-                <p className={clsx("flex items-center gap-2 rounded-2xl px-3.5 py-2.5 text-sm", t.sunken, t.faint)}>
-                  <Loader size={14} className="animate-spin" /> thinking
-                </p>
-              </div>
-            )}
             <div ref={chatEndRef} />
           </div>
           <div className={clsx("flex items-center gap-2 border-t p-3", t.border)}>
@@ -1237,19 +1115,18 @@ function Call({ t, user, peer, onEnd, notify, onSafety }) {
               <Mic size={16} />
             </button>
             <Input t={t} value={draft} maxLength={2000}
-              placeholder={isAI ? "Say what's on your mind" : "Type instead of speaking"}
+              placeholder="Type instead of speaking"
               onChange={(e) => setDraft(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && !e.shiftKey && send()} />
-            <Button _t={t} size="sm" onClick={send} disabled={thinking || !draft.trim()} aria-label="Send">
+            <Button _t={t} size="sm" onClick={send} disabled={!draft.trim()} aria-label="Send">
               <Send size={15} />
             </Button>
           </div>
-          {breathe && isAI && <Breathing t={t} onClose={() => setBreathe(false)} />}
         </div>
       </div>
 
       <div className={clsx("mt-6 flex flex-wrap items-center justify-center gap-2 rounded-full border p-2", t.surface, t.border)}>
-        {!isAI && useAudioDevice && (
+        {useAudioDevice && (
           <Button _t={t} variant={muted ? "danger" : "ghost"} onClick={() => setMuted(!muted)}>
             {muted ? <MicOff size={16} /> : <Mic size={16} />} {muted ? "Unmute" : "Mute"}
           </Button>
@@ -1259,18 +1136,11 @@ function Call({ t, user, peer, onEnd, notify, onSafety }) {
             {camOn ? <Video size={16} /> : <VideoOff size={16} />} Camera
           </Button>
         )}
-        {isAI && (
-          <Button _t={t} variant="ghost" onClick={() => { setSpeakReplies(!speakReplies); if (speakReplies) window.speechSynthesis?.cancel(); }}>
-            {speakReplies ? <Volume2 size={16} /> : <VolumeX size={16} />} {speakReplies ? "Reading aloud" : "Read aloud"}
-          </Button>
-        )}
-        {!isAI && (
-          <Button _t={t} variant="ghost" onClick={() => setChatOpen(!chatOpen)}><MessageSquare size={16} /> Chat</Button>
-        )}
+        <Button _t={t} variant="ghost" onClick={() => setChatOpen(!chatOpen)}><MessageSquare size={16} /> Chat</Button>
         <Button _t={t} variant="ghost" onClick={() => setBreathe(true)}><Wind size={16} /> Breathe</Button>
-        {!isAI && <Button _t={t} variant="ghost" onClick={() => setPrompt(pick(PROMPTS))}><Sparkles size={16} /> Prompt</Button>}
-        {!isAI && <Button _t={t} variant="ghost" onClick={() => onEnd(secs, true)}><SkipForward size={16} /> Skip</Button>}
-        <Button _t={t} variant="danger" onClick={() => { window.speechSynthesis?.cancel(); onEnd(secs, false); }}>
+        <Button _t={t} variant="ghost" onClick={() => setPrompt(pick(PROMPTS))}><Sparkles size={16} /> Prompt</Button>
+        <Button _t={t} variant="ghost" onClick={() => onEnd(secs, true)}><SkipForward size={16} /> Skip</Button>
+        <Button _t={t} variant="danger" onClick={() => onEnd(secs, false)}>
           <PhoneOff size={16} /> End
         </Button>
       </div>
@@ -1309,7 +1179,6 @@ function PostCall({ t, peer, seconds, onSave, onAgain, onHome }) {
   const [kudos, setKudos] = useState([]);
   const [note, setNote] = useState("");
   const [blocked, setBlocked] = useState(false);
-  const isAI = peer.kind === "ai";
 
   return (
     <div className="mx-auto max-w-lg px-6 py-12">
@@ -1331,17 +1200,15 @@ function PostCall({ t, peer, seconds, onSave, onAgain, onHome }) {
           </div>
         </div>
 
-        {!isAI && (
-          <div>
-            <p className="mb-3 text-sm font-medium">Send {peer.handle} some kudos</p>
-            <div className="flex flex-wrap gap-2">
-              {KUDOS.map((k) => (
-                <Chip key={k} t={t} active={kudos.includes(k)}
-                  onClick={() => setKudos((v) => (v.includes(k) ? v.filter((x) => x !== k) : [...v, k]))}>{k}</Chip>
-              ))}
-            </div>
+        <div>
+          <p className="mb-3 text-sm font-medium">Send {peer.handle} some kudos</p>
+          <div className="flex flex-wrap gap-2">
+            {KUDOS.map((k) => (
+              <Chip key={k} t={t} active={kudos.includes(k)}
+                onClick={() => setKudos((v) => (v.includes(k) ? v.filter((x) => x !== k) : [...v, k]))}>{k}</Chip>
+            ))}
           </div>
-        )}
+        </div>
 
         <div>
           <p className="mb-2 text-sm font-medium">A note to yourself</p>
@@ -1351,13 +1218,11 @@ function PostCall({ t, peer, seconds, onSave, onAgain, onHome }) {
             className={clsx("w-full resize-none rounded-xl border px-4 py-3 text-sm outline-none focus:border-amber-300", t.input)} />
         </div>
 
-        {!isAI && (
-          <button onClick={() => setBlocked(!blocked)}
-            className={clsx("flex w-full items-center gap-3 rounded-xl border px-4 py-3 text-left text-sm",
-              blocked ? "border-rose-400 text-rose-400" : t.border, t.hover)}>
-            <Ban size={16} /> {blocked ? `You won't be matched with ${peer.handle} again` : `Don't match me with ${peer.handle} again`}
-          </button>
-        )}
+        <button onClick={() => setBlocked(!blocked)}
+          className={clsx("flex w-full items-center gap-3 rounded-xl border px-4 py-3 text-left text-sm",
+            blocked ? "border-rose-400 text-rose-400" : t.border, t.hover)}>
+          <Ban size={16} /> {blocked ? `You won't be matched with ${peer.handle} again` : `Don't match me with ${peer.handle} again`}
+        </button>
       </div>
 
       <div className="mt-9 flex flex-wrap gap-3">
@@ -1568,12 +1433,6 @@ function Settings({ t, user, setUser, blocked, setBlocked, dark, setDark, onBack
 
 /* ---------------------------------- app ----------------------------------- */
 
-const AI_PEER = {
-  kind: "ai",
-  handle: "Late Hours AI",
-  blurb: "An AI listener. Not a person, not a therapist — but it's awake and it won't rush you.",
-};
-
 export default function App() {
   const [dark, setDark] = useState(true);
   const t = useTheme(dark);
@@ -1676,7 +1535,6 @@ export default function App() {
     }
   };
 
-  const talkToAI = () => { setPeer(AI_PEER); nav("consent"); };
   const takeCall = () => { setListenerRequested(true); nav("queue"); };
   const matchHuman = () => { setListenerRequested(false); nav("queue"); };
 
@@ -1691,11 +1549,11 @@ export default function App() {
   };
 
   const saveSession = async ({ rating, kudos, note, blocked: b }, then) => {
-    const mode = peer.kind === "ai" ? "text" : (peer.mode || user.mode);
+    const mode = peer.mode || user.mode;
     try {
       const { session } = await api("/api/sessions", {
         method: "POST",
-        body: { peer: peer.handle, isAI: peer.kind === "ai", mode, seconds: lastSeconds, rating, kudos, note },
+        body: { peer: peer.handle, mode, seconds: lastSeconds, rating, kudos, note },
       });
       setSessions((s) => [...s, session]);
       if (b && peer.id && !blocked.some((x) => x.accountId === peer.id)) {
@@ -1767,12 +1625,12 @@ export default function App() {
                     setMoods((m) => [...m, mood]);
                   } catch (e) { notify(e.message, "bad"); }
                 }}
-                onMatchHuman={matchHuman} onTalkToAI={talkToAI} onTakeCall={takeCall}
+                onMatchHuman={matchHuman} onTakeCall={takeCall}
                 onTraining={() => nav("training")} onSafety={() => setSafetyOpen(true)} presence={presence} notify={notify} />
             )}
             {screen === "queue" && user && (
               <Queue t={t} user={user} role={listenerRequested ? "listener" : "seeker"} onMatched={onMatched}
-                onCancel={() => nav("home")} onTalkToAI={talkToAI} presence={presence} notify={notify} />
+                onCancel={() => nav("home")} presence={presence} notify={notify} />
             )}
             {screen === "consent" && user && peer && (
               <Consent t={t} peer={peer} user={user} onAccept={() => nav("call")} onCancel={() => nav("home")} />
@@ -1782,7 +1640,7 @@ export default function App() {
             )}
             {screen === "postcall" && peer && (
               <PostCall t={t} peer={peer} seconds={lastSeconds} onSave={saveSession}
-                onAgain={() => nav(peer.kind === "ai" ? "call" : "queue")} onHome={() => nav("home")} />
+                onAgain={() => nav("queue")} onHome={() => nav("home")} />
             )}
             {screen === "training" && user && <Training t={t} user={user} setUser={setUser} onBack={() => nav("home")} notify={notify} />}
             {screen === "settings" && user && (
@@ -1796,8 +1654,8 @@ export default function App() {
 
       <Modal t={t} open={safetyOpen} onClose={() => setSafetyOpen(false)} wide title="If you need help right now">
         <p className={clsx("text-sm leading-relaxed", t.muted)}>
-          Late Hours isn't an emergency service. Human listeners aren't clinicians and the AI listener
-          is software. If you or someone else is in immediate danger, contact one of these instead.
+          Late Hours isn't an emergency service. Human listeners aren't clinicians. If you or someone
+          else is in immediate danger, contact one of these instead.
         </p>
         <ul className={clsx("mt-5 divide-y", t.border)}>
           {RESOURCES.map((r) => (
@@ -1817,8 +1675,7 @@ export default function App() {
           <Logo size={22} className={t.faint} />
           <p className={clsx("mt-3 max-w-2xl text-sm leading-relaxed", t.faint)}>
             Peer support, not treatment. Human listeners are volunteers who completed a short listening
-            course. The AI listener is software and is labelled as such everywhere it appears. Neither
-            can diagnose, prescribe, or manage a crisis.
+            course. They can't diagnose, prescribe, or manage a crisis.
           </p>
           <p className={clsx("mt-6 text-xs", t.faint)}>Built by Vexoro team</p>
         </div>

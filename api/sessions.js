@@ -14,7 +14,7 @@ export default withErrors(async function handler(req, res) {
 
   if (req.method === 'GET') {
     const { rows } = await query(
-      `SELECT id, peer_handle, is_ai, mode, seconds, rating, kudos, note, created_at
+      `SELECT id, peer_handle, mode, seconds, rating, kudos, note, created_at
        FROM sessions_log WHERE account_id = $1 ORDER BY created_at ASC`,
       [account.id]
     );
@@ -22,7 +22,6 @@ export default withErrors(async function handler(req, res) {
       sessions: rows.map((r) => ({
         id: r.id,
         peer: r.peer_handle,
-        isAI: r.is_ai,
         mode: r.mode,
         seconds: r.seconds,
         rating: r.rating,
@@ -40,17 +39,19 @@ export default withErrors(async function handler(req, res) {
     const rating = Number.isInteger(body.rating) ? Math.min(5, Math.max(0, body.rating)) : 0;
     const kudos = Array.isArray(body.kudos) ? body.kudos.map((k) => sanitize(k, 40)).slice(0, 10) : [];
     const note = sanitize(body.note, 2000);
-    const isAI = body.isAI === true;
 
     if (!peer) return badRequest(res, 'A session needs to name who it was with.');
 
     const id = crypto.randomUUID();
+    /* is_ai stays in the schema (dropping a column needs a real migration,
+       not worth it for a column that's now always false) but every
+       session created from here on is with a real matched human. */
     await query(
       `INSERT INTO sessions_log (id, account_id, peer_handle, is_ai, mode, seconds, rating, kudos, note)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
-      [id, account.id, peer, isAI, mode, seconds, rating, kudos, note]
+       VALUES ($1, $2, $3, false, $4, $5, $6, $7, $8)`,
+      [id, account.id, peer, mode, seconds, rating, kudos, note]
     );
-    return res.status(201).json({ session: { id, peer, isAI, mode, seconds, rating, kudos, note } });
+    return res.status(201).json({ session: { id, peer, mode, seconds, rating, kudos, note } });
   }
 
   return methodNotAllowed(res, ['GET', 'POST']);

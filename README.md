@@ -1,10 +1,10 @@
 # Late Hours — Vercel-ready
 
-Anonymous peer support: voice, video, or text with a trained human listener
-or an AI listener, plus real accounts, mood check-ins, and conversation
-history. The frontend is a Vite + React app; the backend is a set of Vercel
-serverless functions under `api/` backed by Postgres, with Pusher handling
-real-time matching and in-call chat.
+Anonymous peer support: voice, video, or text with a trained human listener,
+plus real accounts, mood check-ins, and conversation history. The frontend is
+a Vite + React app; the backend is a set of Vercel serverless functions under
+`api/` backed by Postgres, with Pusher handling real-time matching and
+in-call chat.
 
 ## What's real here
 
@@ -23,9 +23,6 @@ real-time matching and in-call chat.
   messages as Pusher client events (no extra server round trip per
   message). `api/pusher-auth.js` signs the subscription; the wiring lives
   in the `Call` component in `App.jsx`.
-- **The AI listener** — a real Gemini API call, proxied through
-  `api/listener.js` so the Gemini key never reaches the browser, and now
-  requires a signed-in session.
 - **Reports** — go into a `reports` table for a moderator to read; the
   reported person is never told who filed it.
 
