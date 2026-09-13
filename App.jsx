@@ -18,13 +18,13 @@ import Pusher from "pusher-js";
  *  matches recorded, nobody online) is shown as an empty state rather
  *  than an invented number.
  *
- *  The AI listener is a real Claude API call. The browser calls the
- *  same-origin /api/listener Vercel function so the Anthropic key stays
+ *  The AI listener is a real OpenAI API call. The browser calls the
+ *  same-origin /api/listener Vercel function so the OpenAI key stays
  *  server-side.
  * ------------------------------------------------------------------ */
 
 const CHAT_ENDPOINT = "/api/listener";
-const CHAT_MODEL = "claude-sonnet-4-6";
+const CHAT_MODEL = "gpt-4o-mini";
 
 const TOPICS = [
   "Anxiety", "Low mood", "Loneliness", "Work stress", "Grief",
