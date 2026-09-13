@@ -170,11 +170,11 @@ function Mark({ size = 28, className }) {
     <svg viewBox="0 0 32 32" width={size} height={size} className={className} aria-hidden="true">
       <mask id={id}>
         <rect width="32" height="32" fill="#000" />
-        <circle cx="16" cy="16" r="13" fill="#fff" />
-        <circle cx="23.5" cy="10.5" r="11.5" fill="#000" />
+        <circle cx="15" cy="16" r="14" fill="#fff" />
+        <circle cx="22.5" cy="13.5" r="12.5" fill="#000" />
       </mask>
-      <circle cx="16" cy="16" r="13" fill="#fcd34d" mask={`url(#${id})`} />
-      <circle cx="20.6" cy="19.4" r="2.7" fill="#fda4af" />
+      <circle cx="15" cy="16" r="14" fill="#fcd34d" mask={`url(#${id})`} />
+      <circle cx="11.5" cy="21" r="3.4" fill="#fda4af" />
     </svg>
   );
 }
