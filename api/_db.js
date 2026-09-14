@@ -132,6 +132,19 @@ export async function ensureSchema() {
         PRIMARY KEY (account_id, blocked_account_id)
       );
     `);
+    /* CREATE TABLE IF NOT EXISTS only helps a brand-new database — a
+       `blocked` table created before blocked_account_id existed keeps its
+       original shape forever otherwise, and every match attempt queries
+       that column (it's what findMatch() in api/queue.js filters on),
+       so a stale table 500s every single time someone tries to join the
+       queue. Patch an old table up to the current shape here. Nullable
+       (not NOT NULL) since ALTER TABLE can't add a NOT NULL column to a
+       table that may already hold rows; a plain unique index (rather
+       than folding this into the primary key) is enough to satisfy the
+       ON CONFLICT (account_id, blocked_account_id) clause in
+       api/blocked.js without touching the existing primary key. */
+    await query(`ALTER TABLE blocked ADD COLUMN IF NOT EXISTS blocked_account_id TEXT REFERENCES accounts(id) ON DELETE CASCADE;`);
+    await query(`CREATE UNIQUE INDEX IF NOT EXISTS blocked_account_pair_idx ON blocked (account_id, blocked_account_id);`);
     await query(`
       CREATE TABLE IF NOT EXISTS reports (
         id BIGSERIAL PRIMARY KEY,
