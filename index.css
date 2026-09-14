@@ -6,3 +6,29 @@
 html { min-height: 100%; }
 body { margin: 0; min-width: 320px; min-height: 100vh; }
 button, input, textarea { font: inherit; }
+
+/* ---------------------------- motion system --------------------------- *
+ * A handful of shared, gentle entrance/exit animations used throughout
+ * the app — kept subtle on purpose (this is a support app, not a product
+ * launch page). Every rule here lives inside prefers-reduced-motion, so
+ * a viewer who's asked for less motion gets none of it: elements simply
+ * render in their final state instead of a "stuck invisible" fallback,
+ * since nothing outside this block ever sets opacity:0 as a base style. */
+@media (prefers-reduced-motion: no-preference) {
+  .animate-fade-up { animation: lh-fade-up .5s cubic-bezier(.16,.8,.3,1) both; }
+  .animate-fade-in { animation: lh-fade-in .35s ease-out both; }
+  .animate-scale-in { animation: lh-scale-in .22s cubic-bezier(.16,.8,.3,1) both; }
+  .animate-pop { animation: lh-pop .32s cubic-bezier(.34,1.56,.64,1) both; }
+  .stagger-1 { animation-delay: .06s; }
+  .stagger-2 { animation-delay: .12s; }
+  .stagger-3 { animation-delay: .18s; }
+  .stagger-4 { animation-delay: .24s; }
+  .stagger-5 { animation-delay: .3s; }
+  .animate-breathe { animation: lh-breathe 4.5s ease-in-out infinite; }
+}
+
+@keyframes lh-fade-up { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes lh-fade-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes lh-scale-in { from { opacity: 0; transform: scale(.95); } to { opacity: 1; transform: scale(1); } }
+@keyframes lh-pop { 0% { transform: scale(.85); } 60% { transform: scale(1.08); } 100% { transform: scale(1); } }
+@keyframes lh-breathe { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.04); } }

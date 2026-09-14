@@ -203,9 +203,10 @@ function Button({ variant = "accent", size = "md", className, children, ...rest 
     <button
       {...rest}
       className={clsx(
-        "inline-flex items-center justify-center gap-2 rounded-full font-medium transition-colors",
+        "inline-flex items-center justify-center gap-2 rounded-full font-medium transition-[color,background-color,border-color,transform,box-shadow] duration-150",
         "focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-300",
-        "disabled:opacity-40 disabled:cursor-not-allowed",
+        "disabled:opacity-40 disabled:cursor-not-allowed disabled:active:scale-100",
+        "active:scale-[0.96] motion-safe:hover:enabled:-translate-y-px",
         sizes[size], variants[variant], className
       )}
     >
@@ -241,9 +242,9 @@ function Chip({ t, active, onClick, children, icon: Icon }) {
     <button
       onClick={onClick}
       className={clsx(
-        "inline-flex items-center gap-1.5 rounded-full px-3.5 py-1.5 text-sm transition-colors",
+        "inline-flex items-center gap-1.5 rounded-full px-3.5 py-1.5 text-sm transition-[color,background-color,transform] duration-150 active:scale-[0.94]",
         "focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-300",
-        active ? "bg-amber-200 text-indigo-950 font-medium" : clsx(t.chip, t.hover)
+        active ? "bg-amber-200 text-indigo-950 font-medium animate-pop" : clsx(t.chip, t.hover)
       )}
     >
       {Icon && <Icon size={13} />}
@@ -253,22 +254,45 @@ function Chip({ t, active, onClick, children, icon: Icon }) {
 }
 
 function Modal({ t, open, onClose, title, children, wide }) {
+  /* Stays mounted a beat past `open` going false, so the close has
+     somewhere to animate to instead of vanishing instantly — the enter
+     side needs no such trick since a CSS keyframe animation (unlike a
+     transition) plays automatically the moment an element is inserted. */
+  const [mounted, setMounted] = useState(open);
+  const [closing, setClosing] = useState(false);
+
+  useEffect(() => {
+    if (open) { setMounted(true); setClosing(false); }
+    else if (mounted) {
+      setClosing(true);
+      const timer = setTimeout(() => setMounted(false), 180);
+      return () => clearTimeout(timer);
+    }
+  }, [open, mounted]);
+
   useEffect(() => {
     if (!open) return;
     const h = (e) => e.key === "Escape" && onClose();
     window.addEventListener("keydown", h);
     return () => window.removeEventListener("keydown", h);
   }, [open, onClose]);
-  if (!open) return null;
+
+  if (!mounted) return null;
   return (
     <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-6">
-      <div className="absolute inset-0 bg-indigo-950 bg-opacity-80" onClick={onClose} />
+      <div
+        className={clsx("absolute inset-0 bg-indigo-950 bg-opacity-80 motion-safe:transition-opacity motion-safe:duration-150",
+          closing ? "motion-safe:opacity-0" : "animate-fade-in")}
+        onClick={onClose}
+      />
       <div role="dialog" aria-modal="true"
         className={clsx("relative w-full rounded-t-3xl sm:rounded-3xl border shadow-2xl max-h-full overflow-y-auto",
+          "motion-safe:transition-[opacity,transform] motion-safe:duration-150",
+          closing ? "motion-safe:opacity-0 motion-safe:scale-95" : "animate-scale-in",
           wide ? "max-w-2xl" : "max-w-lg", t.surface, t.border)}>
         <div className="flex items-start justify-between gap-4 px-6 pt-6 pb-4">
           <h2 className="font-serif text-2xl leading-tight">{title}</h2>
-          <button onClick={onClose} aria-label="Close" className={clsx("rounded-full p-1.5", t.hover)}>
+          <button onClick={onClose} aria-label="Close" className={clsx("rounded-full p-1.5 transition-transform active:scale-90", t.hover)}>
             <X size={18} />
           </button>
         </div>
@@ -283,7 +307,8 @@ function Toasts({ items, dismiss }) {
     <div className="fixed bottom-5 left-1/2 z-[60] flex w-full max-w-sm -translate-x-1/2 flex-col gap-2 px-4">
       {items.map((n) => (
         <div key={n.id} onClick={() => dismiss(n.id)}
-          className={clsx("cursor-pointer rounded-2xl px-4 py-3 text-sm shadow-xl",
+          className={clsx("cursor-pointer rounded-2xl px-4 py-3 text-sm shadow-xl motion-safe:transition-all motion-safe:duration-200",
+            n.leaving ? "motion-safe:opacity-0 motion-safe:translate-y-2 motion-safe:scale-95" : "animate-fade-up",
             n.kind === "bad" ? "bg-rose-500 text-white" : "bg-amber-200 text-indigo-950")}>
           {n.text}
         </div>
@@ -295,9 +320,8 @@ function Toasts({ items, dismiss }) {
 /* -------------------------------- landing --------------------------------- */
 
 function Landing({ t, onStart, onSafety, presence }) {
-  const reduced = useReducedMotion();
   return (
-    <div className="mx-auto max-w-5xl px-6 py-12 sm:py-20">
+    <div className="mx-auto max-w-5xl px-6 py-12 sm:py-20 animate-fade-up">
       <div className="grid gap-12 lg:grid-cols-5 lg:gap-16">
         <div className="lg:col-span-3">
           <h1 className="font-serif text-4xl leading-[1.1] sm:text-6xl">
@@ -320,8 +344,8 @@ function Landing({ t, onStart, onSafety, presence }) {
                 ["Nobody learns your name", "You pick a handle. Accounts hold preferences, not transcripts."],
                 ["Always a real person", "Every listener is a trained peer — never software pretending to be one."],
                 ["You can leave mid-sentence", "Skip, mute, or end at any point. No one is told why."],
-              ].map(([h, b]) => (
-                <div key={h}>
+              ].map(([h, b], i) => (
+                <div key={h} className={clsx("animate-fade-up", `stagger-${i + 2}`)}>
                   <h3 className="font-serif text-lg leading-snug">{h}</h3>
                   <p className={clsx("mt-2 text-sm leading-relaxed", t.faint)}>{b}</p>
                 </div>
@@ -332,9 +356,9 @@ function Landing({ t, onStart, onSafety, presence }) {
 
         <div className="lg:col-span-2">
           <div className={clsx("flex flex-col items-center justify-center rounded-3xl border px-6 py-14", t.surface, t.border)}>
-            <Mark size={92} className={reduced ? "" : "transition-transform duration-700"} />
+            <Mark size={92} className="animate-breathe" />
             <p className="mt-7 text-center font-serif text-xl leading-snug">
-              Someone picks up, or something does.
+              Someone real picks up.
             </p>
             <p className={clsx("mt-2 text-center text-sm leading-relaxed", t.faint)}>
               {presence.listenersOnline === null
@@ -406,7 +430,7 @@ function Auth({ t, onAuthed, notify, onBack }) {
   };
 
   return (
-    <div className="mx-auto flex max-w-md flex-col px-6 py-12 sm:py-16">
+    <div className="mx-auto flex max-w-md flex-col px-6 py-12 sm:py-16 animate-fade-up">
       <button onClick={onBack} className={clsx("mb-8 inline-flex items-center gap-2 self-start text-sm", t.faint)}>
         <ArrowLeft size={15} /> Back
       </button>
@@ -509,7 +533,7 @@ function Onboarding({ t, draft, setDraft, onDone, notify }) {
   };
 
   return (
-    <div className="mx-auto max-w-2xl px-6 py-12 sm:py-16">
+    <div className="mx-auto max-w-2xl px-6 py-12 sm:py-16 animate-fade-up">
       <div className="mb-10 flex items-center gap-2">
         {steps.map((s, i) => (
           <span key={s} className={clsx("h-1 flex-1 rounded-full", i <= step ? "bg-amber-300" : t.sunken)} />
@@ -616,7 +640,7 @@ function Home({ t, user, setUser, sessions, moods, onMood, onMatchHuman, onTakeC
   const [note, setNote] = useState("");
 
   return (
-    <div className="mx-auto max-w-5xl px-6 py-10">
+    <div className="mx-auto max-w-5xl px-6 py-10 animate-fade-up">
       <div className="flex flex-wrap items-end justify-between gap-4">
         <div>
           <h1 className="font-serif text-3xl leading-tight sm:text-4xl">Evening, {user.handle}.</h1>
@@ -692,8 +716,8 @@ function Home({ t, user, setUser, sessions, moods, onMood, onMatchHuman, onTakeC
             {[1, 2, 3, 4, 5].map((v) => (
               <button key={v} onClick={() => { onMood(v); notify("Logged. Only you can see this."); }}
                 aria-label={`Mood ${v} of 5`}
-                className={clsx("flex-1 rounded-xl py-3 text-lg transition-colors",
-                  moods[moods.length - 1]?.v === v ? "bg-amber-200 text-indigo-950" : clsx(t.sunken, t.hover))}>
+                className={clsx("flex-1 rounded-xl py-3 text-lg transition-[color,background-color,transform] active:scale-90",
+                  moods[moods.length - 1]?.v === v ? "bg-amber-200 text-indigo-950 animate-pop" : clsx(t.sunken, t.hover))}>
                 {["😔", "😕", "😐", "🙂", "😌"][v - 1]}
               </button>
             ))}
@@ -866,7 +890,7 @@ function Queue({ t, user, role = "seeker", onMatched, onCancel, presence, notify
 
   if (err) {
     return (
-      <div className="mx-auto flex min-h-[70vh] max-w-md flex-col items-center justify-center px-6 text-center">
+      <div className="mx-auto flex min-h-[70vh] max-w-md flex-col items-center justify-center px-6 text-center animate-fade-up">
         <AlertTriangle size={30} className={t.faint} />
         <h1 className="mt-6 font-serif text-3xl leading-tight">Couldn't join the queue.</h1>
         <p className={clsx("mt-4 text-sm leading-relaxed", t.muted)}>{err}</p>
@@ -876,10 +900,10 @@ function Queue({ t, user, role = "seeker", onMatched, onCancel, presence, notify
   }
 
   return (
-    <div className="mx-auto flex min-h-[70vh] max-w-md flex-col items-center justify-center px-6 text-center">
+    <div className="mx-auto flex min-h-[70vh] max-w-md flex-col items-center justify-center px-6 text-center animate-fade-up">
       <div className="relative flex h-40 w-40 items-center justify-center">
         <span className={clsx("absolute h-full w-full rounded-full border border-indigo-700", !reduced && "animate-ping")} />
-        <Mark size={40} />
+        <Mark size={40} className="animate-breathe" />
       </div>
       <h1 className="mt-10 font-serif text-3xl leading-tight">
         {role === "listener" ? "You're available. Waiting for someone to talk to." : "Looking for someone with time."}
@@ -911,7 +935,7 @@ function Consent({ t, peer, user, onAccept, onCancel }) {
   const all = agreed.every(Boolean);
 
   return (
-    <div className="mx-auto max-w-lg px-6 py-12">
+    <div className="mx-auto max-w-lg px-6 py-12 animate-fade-up">
       <p className={clsx("text-sm", t.faint)}>Matched</p>
       <h1 className="mt-2 font-serif text-3xl leading-tight">{peer.handle} is ready when you are.</h1>
 
@@ -1223,7 +1247,7 @@ function Call({ t, user, peer, onEnd, notify, onSafety }) {
   };
 
   return (
-    <div className="relative mx-auto max-w-6xl px-4 py-6 sm:px-6">
+    <div className="relative mx-auto max-w-6xl px-4 py-6 sm:px-6 animate-fade-up">
       <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-2.5">
           <span className="h-2 w-2 rounded-full bg-emerald-300" />
@@ -1336,7 +1360,7 @@ function PostCall({ t, peer, seconds, onSave, onAgain, onHome }) {
   const [blocked, setBlocked] = useState(false);
 
   return (
-    <div className="mx-auto max-w-lg px-6 py-12">
+    <div className="mx-auto max-w-lg px-6 py-12 animate-fade-up">
       <h1 className="font-serif text-3xl leading-tight">That was {fmtTime(seconds)} with {peer.handle}.</h1>
       <p className={clsx("mt-3 text-sm leading-relaxed", t.muted)}>
         The conversation itself wasn't saved. Anything you write below is yours alone.
@@ -1348,7 +1372,8 @@ function PostCall({ t, peer, seconds, onSave, onAgain, onHome }) {
           <div className="flex gap-2">
             {[1, 2, 3, 4, 5].map((v) => (
               <button key={v} onClick={() => setRating(v)} aria-label={`${v} stars`}
-                className={clsx("flex-1 rounded-xl py-3", v <= rating ? "bg-amber-200 text-indigo-950" : clsx(t.sunken, t.hover))}>
+                className={clsx("flex-1 rounded-xl py-3 transition-[color,background-color,transform] active:scale-90",
+                  v <= rating ? "bg-amber-200 text-indigo-950" : clsx(t.sunken, t.hover), v === rating && "animate-pop")}>
                 <Star size={18} className="mx-auto" fill={v <= rating ? "currentColor" : "none"} />
               </button>
             ))}
@@ -1417,7 +1442,7 @@ function Training({ t, user, setUser, onBack, notify }) {
   };
 
   return (
-    <div className="mx-auto max-w-3xl px-6 py-12">
+    <div className="mx-auto max-w-3xl px-6 py-12 animate-fade-up">
       <button onClick={onBack} className={clsx("mb-8 inline-flex items-center gap-2 text-sm", t.faint)}>
         <ArrowLeft size={15} /> Home
       </button>
@@ -1498,7 +1523,7 @@ function Settings({ t, user, setUser, blocked, setBlocked, dark, setDark, onBack
   };
 
   return (
-    <div className="mx-auto max-w-2xl px-6 py-12">
+    <div className="mx-auto max-w-2xl px-6 py-12 animate-fade-up">
       <button onClick={onBack} className={clsx("mb-8 inline-flex items-center gap-2 text-sm", t.faint)}>
         <ArrowLeft size={15} /> Home
       </button>
@@ -1607,12 +1632,18 @@ export default function App() {
   const [safetyOpen, setSafetyOpen] = useState(false);
   const [toasts, setToasts] = useState([]);
 
+  /* Two-phase removal — flag as leaving so the exit transition has
+     something to animate, then actually drop it from the array once
+     that's had time to play. */
+  const dismiss = useCallback((id) => {
+    setToasts((v) => v.map((x) => (x.id === id ? { ...x, leaving: true } : x)));
+    setTimeout(() => setToasts((v) => v.filter((x) => x.id !== id)), 220);
+  }, []);
   const notify = useCallback((text, kind = "good") => {
     const id = Date.now() + Math.random();
     setToasts((v) => [...v, { id, text, kind }]);
-    setTimeout(() => setToasts((v) => v.filter((x) => x.id !== id)), 4500);
-  }, []);
-  const dismiss = (id) => setToasts((v) => v.filter((x) => x.id !== id));
+    setTimeout(() => dismiss(id), 4500);
+  }, [dismiss]);
   const nav = useCallback((to) => setScreen(to), []);
 
   /* Restore a signed-in session on load (the cookie survives a refresh
