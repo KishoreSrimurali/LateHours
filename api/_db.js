@@ -77,6 +77,30 @@ let migrated = globalThis.__lateHoursMigrated || null;
 export async function ensureSchema() {
   if (migrated) return migrated;
   const attempt = (async () => {
+    /* All of this used to be nine separate awaited round trips — on a
+       cold start that's nine sequential network hops to Postgres before
+       the function can answer anything at all, which is real, visible
+       latency (worse still if Neon's own instance has to wake from
+       autosuspend on the same request). None of these statements take
+       parameters, so the simple query protocol can run them all as one
+       round trip instead — Postgres executes a semicolon-separated batch
+       server-side in order, same as before, just without paying network
+       latency nine times over.
+
+       blocked is keyed on the blocked account's stable id, not their
+       handle — a handle can be changed any time from Settings, and a
+       block that stopped working the moment someone renamed themselves
+       wouldn't be much of a block. blocked_handle is kept only as a
+       label for the "Blocked" list in Settings; matching logic never
+       reads it. The ALTER/CREATE INDEX pair patches a `blocked` table
+       created before blocked_account_id existed — CREATE TABLE IF NOT
+       EXISTS alone only helps a brand-new database, and every match
+       attempt queries that column, so a stale table would 500 on every
+       single queue join otherwise. queue: one open row per account while
+       waiting or available — the unique index makes "join" an upsert, so
+       a listener going available twice, or a seeker whose earlier tab
+       never left, can't create a duplicate that quietly out-waits the
+       real one. */
     await query(`
       CREATE TABLE IF NOT EXISTS accounts (
         id TEXT PRIMARY KEY,
@@ -95,16 +119,14 @@ export async function ensureSchema() {
         time_warn BOOLEAN NOT NULL DEFAULT true,
         created_at TIMESTAMPTZ NOT NULL DEFAULT now()
       );
-    `);
-    await query(`
+
       CREATE TABLE IF NOT EXISTS moods (
         id BIGSERIAL PRIMARY KEY,
         account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
         value SMALLINT NOT NULL,
         created_at TIMESTAMPTZ NOT NULL DEFAULT now()
       );
-    `);
-    await query(`
+
       CREATE TABLE IF NOT EXISTS sessions_log (
         id TEXT PRIMARY KEY,
         account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
@@ -117,13 +139,7 @@ export async function ensureSchema() {
         note TEXT NOT NULL DEFAULT '',
         created_at TIMESTAMPTZ NOT NULL DEFAULT now()
       );
-    `);
-    /* Keyed on the blocked account's stable id, not their handle — a handle
-       can be changed any time from Settings, and a block that stopped
-       working the moment someone renamed themselves wouldn't be much of a
-       block. blocked_handle is kept only as a label for the "Blocked" list
-       in Settings; matching logic never reads it. */
-    await query(`
+
       CREATE TABLE IF NOT EXISTS blocked (
         account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
         blocked_account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
@@ -131,21 +147,9 @@ export async function ensureSchema() {
         created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
         PRIMARY KEY (account_id, blocked_account_id)
       );
-    `);
-    /* CREATE TABLE IF NOT EXISTS only helps a brand-new database — a
-       `blocked` table created before blocked_account_id existed keeps its
-       original shape forever otherwise, and every match attempt queries
-       that column (it's what findMatch() in api/queue.js filters on),
-       so a stale table 500s every single time someone tries to join the
-       queue. Patch an old table up to the current shape here. Nullable
-       (not NOT NULL) since ALTER TABLE can't add a NOT NULL column to a
-       table that may already hold rows; a plain unique index (rather
-       than folding this into the primary key) is enough to satisfy the
-       ON CONFLICT (account_id, blocked_account_id) clause in
-       api/blocked.js without touching the existing primary key. */
-    await query(`ALTER TABLE blocked ADD COLUMN IF NOT EXISTS blocked_account_id TEXT REFERENCES accounts(id) ON DELETE CASCADE;`);
-    await query(`CREATE UNIQUE INDEX IF NOT EXISTS blocked_account_pair_idx ON blocked (account_id, blocked_account_id);`);
-    await query(`
+      ALTER TABLE blocked ADD COLUMN IF NOT EXISTS blocked_account_id TEXT REFERENCES accounts(id) ON DELETE CASCADE;
+      CREATE UNIQUE INDEX IF NOT EXISTS blocked_account_pair_idx ON blocked (account_id, blocked_account_id);
+
       CREATE TABLE IF NOT EXISTS reports (
         id BIGSERIAL PRIMARY KEY,
         reporter_id TEXT REFERENCES accounts(id) ON DELETE SET NULL,
@@ -154,12 +158,7 @@ export async function ensureSchema() {
         reason TEXT NOT NULL,
         created_at TIMESTAMPTZ NOT NULL DEFAULT now()
       );
-    `);
-    /* One open row per account while it is waiting or available. A unique
-       index on account_id means "join" is really an upsert — a listener who
-       goes available twice, or a seeker whose earlier tab never left the
-       queue, doesn't create a duplicate that quietly out-waits the real one. */
-    await query(`
+
       CREATE TABLE IF NOT EXISTS queue (
         id TEXT PRIMARY KEY,
         account_id TEXT NOT NULL UNIQUE REFERENCES accounts(id) ON DELETE CASCADE,
@@ -171,8 +170,7 @@ export async function ensureSchema() {
         status TEXT NOT NULL DEFAULT 'waiting',
         created_at TIMESTAMPTZ NOT NULL DEFAULT now()
       );
-    `);
-    await query(`
+
       CREATE TABLE IF NOT EXISTS calls (
         id TEXT PRIMARY KEY,
         seeker_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
