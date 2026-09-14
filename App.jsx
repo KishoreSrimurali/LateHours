@@ -1005,6 +1005,7 @@ function Call({ t, user, peer, onEnd, notify, onSafety }) {
   const [listening, setListening] = useState(false);
 
   const [hasRemoteStream, setHasRemoteStream] = useState(false);
+  const hasRemoteStreamRef = useRef(false);
 
   const videoRef = useRef(null);
   const remoteVideoRef = useRef(null);
@@ -1048,6 +1049,7 @@ function Call({ t, user, peer, onEnd, notify, onSafety }) {
     let cancelled = false;
     let channel = null;
     let pc = null;
+    let stallTimer = null;
     const client = getPusherClient();
     const onMessage = (data) => setMsgs((m) => [...m, { id: Date.now() + Math.random(), who: "peer", text: data.text }]);
     let onSignal = null;
@@ -1082,6 +1084,7 @@ function Call({ t, user, peer, onEnd, notify, onSafety }) {
         if (e.candidate) channel.trigger("client-webrtc-signal", { kind: "ice", candidate: e.candidate });
       };
       pc.ontrack = (e) => {
+        hasRemoteStreamRef.current = true;
         setHasRemoteStream(true);
         const [remoteStream] = e.streams;
         if (useVideo) {
@@ -1117,9 +1120,22 @@ function Call({ t, user, peer, onEnd, notify, onSafety }) {
           }
         } catch (err) {
           console.error("Call setup error:", err);
+          if (!cancelled) notify("Couldn't set up the call connection. Try skipping and matching again.", "bad");
         }
       };
       channel.bind("client-webrtc-signal", onSignal);
+
+      /* Nothing here throws when signaling is silently going nowhere —
+         a Pusher app without "client events" enabled, for instance,
+         just never delivers the trigger, with no error on either side.
+         If no remote track has shown up after a generous window, say so
+         plainly instead of leaving "connecting audio…" up forever with
+         no explanation. */
+      stallTimer = setTimeout(() => {
+        if (!cancelled && !hasRemoteStreamRef.current) {
+          notify("Still connecting — if this doesn't clear up, the call link may not be reaching the other side.", "bad");
+        }
+      }, 15000);
 
       /* Deterministic offerer — no extra coordination needed since the
          match already tells each side its role. Wait for the channel
@@ -1138,6 +1154,7 @@ function Call({ t, user, peer, onEnd, notify, onSafety }) {
 
     return () => {
       cancelled = true;
+      if (stallTimer) clearTimeout(stallTimer);
       if (channel) {
         channel.unbind("client-message", onMessage);
         if (onSignal) channel.unbind("client-webrtc-signal", onSignal);
