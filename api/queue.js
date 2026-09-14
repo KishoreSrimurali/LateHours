@@ -101,6 +101,16 @@ export default withErrors(async function handler(req, res) {
       const seekerHandle = role === 'seeker' ? account.handle : other.handle;
       const listenerId = role === 'seeker' ? other.account_id : account.id;
       const listenerHandle = role === 'seeker' ? other.handle : account.handle;
+      /* The call's mode is always the SEEKER's choice, never whichever
+         side's request happened to be the one that completed the match.
+         `mode` above is only this request's own value — if a listener's
+         join is what resolves the match, using it here would silently
+         overwrite a seeker's "Video" pick with the listener's own
+         (usually default) mode, and video would never even be
+         requested. `other.mode` is the waiting party's originally
+         stored preference, so pick whichever of the two actually
+         belongs to the seeker. */
+      const seekerMode = role === 'seeker' ? mode : other.mode;
       /* Whichever of the two had been queued longer is the one who actually
          waited — the other side just walked in and got matched instantly. */
       const seekerQueuedAt = role === 'seeker' ? new Date() : other.created_at;
@@ -108,10 +118,10 @@ export default withErrors(async function handler(req, res) {
       const callId = crypto.randomUUID();
       await client.query(
         `INSERT INTO calls (id, seeker_id, listener_id, mode, wait_seconds) VALUES ($1, $2, $3, $4, $5)`,
-        [callId, seekerId, listenerId, mode, waitSeconds]
+        [callId, seekerId, listenerId, seekerMode, waitSeconds]
       );
       await client.query('COMMIT');
-      matchResult = { callId, mode, seekerId, seekerHandle, listenerId, listenerHandle };
+      matchResult = { callId, mode: seekerMode, seekerId, seekerHandle, listenerId, listenerHandle };
     }
   } catch (err) {
     await client.query('ROLLBACK').catch(() => {});
