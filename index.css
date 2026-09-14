@@ -1,8 +1,4 @@
-/* Google Fonts are loaded from index.html via <link>, not @import here —
-   an @import inside CSS is render-blocking (the browser must fetch this
-   stylesheet, then serially fetch the font CSS, before it can paint any
-   text at all). A <link> in the HTML <head> lets the browser discover
-   and fetch it in parallel with everything else instead. */
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600&family=Playfair+Display:wght@400;500;600&display=swap');
 @import 'tailwindcss';
 
 :root { font-family: 'DM Sans', ui-sans-serif, system-ui, sans-serif; }
