@@ -803,7 +803,34 @@ function Queue({ t, user, role = "seeker", onMatched, onCancel, presence, notify
   useEffect(() => {
     let cancelled = false;
     let channel = null;
+    let pollTimer = null;
     const client = getPusherClient();
+
+    const claim = (payload) => {
+      if (settled.current) return;
+      settled.current = true;
+      onMatched(payload);
+    };
+
+    /* The Pusher push is the fast path, but this side's entire chance of
+       ever finding out it got matched otherwise depends on that one
+       real-time message arriving — no retry, no fallback, nothing. If
+       it's ever missed (a Pusher misconfig, a subscription that hadn't
+       finished authorizing yet, anything), the queue screen would wait
+       forever with no way out. Polling GET /api/queue is the backstop:
+       once a queue row disappears, the server can tell us whether that
+       was because we got matched (see api/queue.js) and hand back the
+       same match info the push would have. */
+    const poll = async () => {
+      if (cancelled || settled.current) return;
+      try {
+        const res = await api("/api/queue");
+        if (res.matched) claim(res.matched);
+      } catch {
+        // A single failed poll isn't worth surfacing — the next one, or
+        // the Pusher push, will still get there.
+      }
+    };
 
     (async () => {
       try {
@@ -814,17 +841,14 @@ function Queue({ t, user, role = "seeker", onMatched, onCancel, presence, notify
         const result = await api("/api/queue", { method: "POST", body });
         if (cancelled) return;
         if (result.matched) {
-          settled.current = true;
-          onMatched(result);
+          claim(result);
           return;
         }
         if (client) {
           channel = client.subscribe(`private-user-${user.id}`);
-          channel.bind("matched", (payload) => {
-            settled.current = true;
-            onMatched(payload);
-          });
+          channel.bind("matched", claim);
         }
+        pollTimer = setInterval(poll, 4000);
       } catch (e) {
         if (!cancelled) setErr(e.message);
       }
@@ -832,6 +856,7 @@ function Queue({ t, user, role = "seeker", onMatched, onCancel, presence, notify
 
     return () => {
       cancelled = true;
+      if (pollTimer) clearInterval(pollTimer);
       if (channel) client?.unsubscribe(`private-user-${user.id}`);
       /* Leaving mid-wait (cancelled, or the match already came through and
          we navigated away) — either way there's nothing left to hold open. */

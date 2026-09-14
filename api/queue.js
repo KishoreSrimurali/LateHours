@@ -36,7 +36,34 @@ export default withErrors(async function handler(req, res) {
     const client = await getClient();
     try {
       const { rows } = await client.query('SELECT * FROM queue WHERE account_id = $1', [account.id]);
-      return res.status(200).json({ queued: rows[0] || null });
+      if (rows[0]) return res.status(200).json({ queued: rows[0], matched: null });
+
+      /* Still waiting (no queue row) but not queued means one of two
+         things: never joined, or matched and the queue row was deleted
+         as part of that. The frontend relies on a Pusher push to learn
+         about a match while it's waiting — this is the fallback for
+         when that push never arrives (a Pusher misconfiguration, a
+         subscription race, anything): the waiting side polls this
+         endpoint periodically, and if a call naming this account was
+         created very recently, hand back the same match info the push
+         would have carried instead of leaving it waiting forever. */
+      const { rows: callRows } = await client.query(
+        `SELECT c.id, c.mode, c.seeker_id, c.listener_id, s.handle AS seeker_handle, l.handle AS listener_handle
+         FROM calls c
+         JOIN accounts s ON s.id = c.seeker_id
+         JOIN accounts l ON l.id = c.listener_id
+         WHERE (c.seeker_id = $1 OR c.listener_id = $1) AND c.created_at > now() - interval '90 seconds'
+         ORDER BY c.created_at DESC LIMIT 1`,
+        [account.id]
+      );
+      const call = callRows[0];
+      if (!call) return res.status(200).json({ queued: null, matched: null });
+
+      const myRole = call.seeker_id === account.id ? 'seeker' : 'listener';
+      const peer = myRole === 'seeker'
+        ? { kind: 'human', id: call.listener_id, handle: call.listener_handle, blurb: 'A trained peer listener.' }
+        : { kind: 'human', id: call.seeker_id, handle: call.seeker_handle, blurb: 'Someone who wants to talk.' };
+      return res.status(200).json({ queued: null, matched: { callId: call.id, mode: call.mode, myRole, peer } });
     } finally {
       client.release();
     }
