@@ -125,14 +125,19 @@ export default withErrors(async function handler(req, res) {
   }
 
   const { callId, mode: matchedMode, seekerId, seekerHandle, listenerId, listenerHandle } = matchResult;
+  /* myRole tells each browser which side of the match *it* is — used
+     client-side to decide, deterministically and without a second round
+     trip, which side creates the WebRTC offer (the seeker always does). */
   const seekerPayload = {
     callId,
     mode: matchedMode,
+    myRole: 'seeker',
     peer: { kind: 'human', id: listenerId, handle: listenerHandle, blurb: 'A trained peer listener.' },
   };
   const listenerPayload = {
     callId,
     mode: matchedMode,
+    myRole: 'listener',
     peer: { kind: 'human', id: seekerId, handle: seekerHandle, blurb: 'Someone who wants to talk.' },
   };
 

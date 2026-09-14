@@ -18,11 +18,15 @@ in-call chat.
   language preferred, blocks respected in both directions); whoever's
   already waiting gets a Pusher push the instant a match is found.
   `api/queue.js`, `api/presence.js`.
-- **In-call chat between two humans** — once matched, both browsers
-  subscribe to a private Pusher channel scoped to that call and exchange
-  messages as Pusher client events (no extra server round trip per
-  message). `api/pusher-auth.js` signs the subscription; the wiring lives
-  in the `Call` component in `App.jsx`.
+- **In-call chat and real voice/video between two humans** — once
+  matched, both browsers subscribe to a private Pusher channel scoped to
+  that call. Chat travels as Pusher client events; voice and video are a
+  real WebRTC connection, using that same channel only to exchange the
+  SDP offer/answer and ICE candidates — the actual audio/video streams
+  directly peer-to-peer once connected, never through the server.
+  `api/pusher-auth.js` signs the subscription; `api/queue.js` tells each
+  side which one creates the offer; the wiring lives in the `Call`
+  component in `App.jsx`.
 - **Reports** — go into a `reports` table for a moderator to read; the
   reported person is never told who filed it.
 
@@ -31,10 +35,15 @@ already collected (a rating, kudos, and the seeker's own private note).
 
 ## What's still missing
 
-Real audio/video between two matched humans (`Call`'s video tiles only
-preview your own camera today) needs a WebRTC signaling layer and a TURN
-server for reliability across networks — the chat/matching backend here
-would carry that signaling, but it isn't wired up yet.
+Real audio/video between two matched humans works via WebRTC, signaled
+over the same private Pusher channel used for chat (SDP offer/answer and
+ICE candidates only — the media itself flows directly peer-to-peer once
+connected). It uses free public STUN servers only, no TURN relay. That's
+enough for most home and mobile networks, but a call between two people
+both behind a restrictive NAT (some corporate networks, carrier-grade
+NAT) can fail to find a direct path and never connect. Adding a TURN
+server (e.g. Twilio, Metered, or a self-hosted coturn) as a fallback
+relay would close that gap, but isn't free to run, so it's left out here.
 
 ## Setup
 

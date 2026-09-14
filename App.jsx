@@ -51,6 +51,16 @@ const TRAINING = [
 
 const KUDOS = ["Really listened", "Didn't rush me", "Felt understood", "Kind", "Asked good questions", "Stayed calm"];
 
+/* Public, free STUN servers — enough for most home/mobile networks to
+   find a direct path to each other. Behind a stricter NAT (corporate
+   networks, some carrier-grade NAT) a call can still fail to connect
+   without a TURN relay, which isn't free to run; STUN-only is the right
+   default for a project with no infrastructure budget. */
+const ICE_SERVERS = [
+  { urls: "stun:stun.l.google.com:19302" },
+  { urls: "stun:stun1.l.google.com:19302" },
+];
+
 /* ---------------------------------- utils --------------------------------- */
 
 const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
@@ -969,33 +979,19 @@ function Call({ t, user, peer, onEnd, notify, onSafety }) {
   const [prompt, setPrompt] = useState(null);
   const [listening, setListening] = useState(false);
 
+  const [hasRemoteStream, setHasRemoteStream] = useState(false);
+
   const videoRef = useRef(null);
+  const remoteVideoRef = useRef(null);
+  const remoteAudioRef = useRef(null);
   const streamRef = useRef(null);
+  const pcRef = useRef(null);
   const chatEndRef = useRef(null);
   const recogRef = useRef(null);
   const callChannelRef = useRef(null);
 
   const useVideo = mode === "video";
   const useAudioDevice = mode !== "text";
-
-  useEffect(() => {
-    if (!useAudioDevice && !useVideo) return;
-    let cancelled = false;
-    (async () => {
-      try {
-        const s = await navigator.mediaDevices.getUserMedia({ audio: true, video: useVideo });
-        if (cancelled) { s.getTracks().forEach((x) => x.stop()); return; }
-        streamRef.current = s;
-        if (videoRef.current) videoRef.current.srcObject = s;
-      } catch {
-        if (!cancelled) {
-          setCamError(true);
-          notify("No camera or mic access — continuing without it.", "bad");
-        }
-      }
-    })();
-    return () => { cancelled = true; streamRef.current?.getTracks().forEach((x) => x.stop()); };
-  }, [useAudioDevice, useVideo, notify]);
 
   useEffect(() => { streamRef.current?.getAudioTracks().forEach((tr) => (tr.enabled = !muted)); }, [muted]);
   useEffect(() => { streamRef.current?.getVideoTracks().forEach((tr) => (tr.enabled = camOn)); }, [camOn]);
@@ -1007,26 +1003,127 @@ function Call({ t, user, peer, onEnd, notify, onSafety }) {
 
   useEffect(() => { chatEndRef.current?.scrollIntoView({ block: "nearest" }); }, [msgs, chatOpen]);
 
-  /* Messages travel over a private Pusher channel scoped to this one call
-     — /api/pusher-auth only signs it for the two accounts the /api/queue
-     match created it for. Pusher's own "client events" carry the text
-     directly between the two browsers without another server round trip;
-     the channel must have client events enabled in the Pusher dashboard
-     for that app. */
+  /* One combined setup for the whole call session: local media, the
+     Pusher channel (chat + WebRTC signaling), and — for voice/video
+     calls — the actual peer-to-peer audio/video connection. Kept in one
+     effect so local media is guaranteed ready before it's attached to
+     the peer connection, rather than racing two separate effects.
+
+     Messages and signaling both travel over a private Pusher channel
+     scoped to this one call — /api/pusher-auth only signs it for the two
+     accounts the /api/queue match created it for. Pusher's own "client
+     events" carry data directly between the two browsers without another
+     server round trip; the channel must have client events enabled in
+     the Pusher dashboard for that app. WebRTC itself (once connected)
+     carries audio/video directly, peer-to-peer — Pusher only ever
+     carries the handshake (SDP offer/answer, ICE candidates), never the
+     media itself. */
   useEffect(() => {
     if (!peer.callId) return;
+    let cancelled = false;
+    let channel = null;
+    let pc = null;
     const client = getPusherClient();
-    if (!client) return;
-    const channel = client.subscribe(`private-call-${peer.callId}`);
-    callChannelRef.current = channel;
     const onMessage = (data) => setMsgs((m) => [...m, { id: Date.now() + Math.random(), who: "peer", text: data.text }]);
-    channel.bind("client-message", onMessage);
+    let onSignal = null;
+
+    (async () => {
+      if (mode !== "text") {
+        try {
+          const s = await navigator.mediaDevices.getUserMedia({ audio: true, video: useVideo });
+          if (cancelled) { s.getTracks().forEach((x) => x.stop()); return; }
+          streamRef.current = s;
+          if (videoRef.current) videoRef.current.srcObject = s;
+        } catch {
+          if (!cancelled) {
+            setCamError(true);
+            notify("No camera or mic access — continuing without it.", "bad");
+          }
+        }
+      }
+      if (cancelled || !client) return;
+
+      channel = client.subscribe(`private-call-${peer.callId}`);
+      callChannelRef.current = channel;
+      channel.bind("client-message", onMessage);
+
+      if (mode === "text") return;
+
+      pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
+      pcRef.current = pc;
+      streamRef.current?.getTracks().forEach((track) => pc.addTrack(track, streamRef.current));
+
+      pc.onicecandidate = (e) => {
+        if (e.candidate) channel.trigger("client-webrtc-signal", { kind: "ice", candidate: e.candidate });
+      };
+      pc.ontrack = (e) => {
+        setHasRemoteStream(true);
+        const [remoteStream] = e.streams;
+        if (useVideo) {
+          if (remoteVideoRef.current) remoteVideoRef.current.srcObject = remoteStream;
+        } else if (remoteAudioRef.current) {
+          remoteAudioRef.current.srcObject = remoteStream;
+        }
+      };
+
+      /* ICE candidates can arrive before the remote description is set
+         (perfectly normal — they're generated and sent independently);
+         addIceCandidate throws if called too early, so queue them. */
+      let remoteDescSet = false;
+      let pending = [];
+      onSignal = async (payload) => {
+        try {
+          if (payload.kind === "offer") {
+            await pc.setRemoteDescription(new RTCSessionDescription(payload.description));
+            remoteDescSet = true;
+            for (const c of pending) await pc.addIceCandidate(new RTCIceCandidate(c));
+            pending = [];
+            const answer = await pc.createAnswer();
+            await pc.setLocalDescription(answer);
+            channel.trigger("client-webrtc-signal", { kind: "answer", description: answer });
+          } else if (payload.kind === "answer") {
+            await pc.setRemoteDescription(new RTCSessionDescription(payload.description));
+            remoteDescSet = true;
+            for (const c of pending) await pc.addIceCandidate(new RTCIceCandidate(c));
+            pending = [];
+          } else if (payload.kind === "ice" && payload.candidate) {
+            if (remoteDescSet) await pc.addIceCandidate(new RTCIceCandidate(payload.candidate));
+            else pending.push(payload.candidate);
+          }
+        } catch (err) {
+          console.error("Call setup error:", err);
+        }
+      };
+      channel.bind("client-webrtc-signal", onSignal);
+
+      /* Deterministic offerer — no extra coordination needed since the
+         match already tells each side its role. Wait for the channel
+         subscription to actually be confirmed before sending anything:
+         a client event triggered before that can silently go nowhere. */
+      if (peer.myRole === "seeker") {
+        channel.bind("pusher:subscription_succeeded", async function onSub() {
+          channel.unbind("pusher:subscription_succeeded", onSub);
+          if (cancelled) return;
+          const offer = await pc.createOffer();
+          await pc.setLocalDescription(offer);
+          channel.trigger("client-webrtc-signal", { kind: "offer", description: offer });
+        });
+      }
+    })();
+
     return () => {
-      channel.unbind("client-message", onMessage);
-      client.unsubscribe(`private-call-${peer.callId}`);
+      cancelled = true;
+      if (channel) {
+        channel.unbind("client-message", onMessage);
+        if (onSignal) channel.unbind("client-webrtc-signal", onSignal);
+        client?.unsubscribe(`private-call-${peer.callId}`);
+      }
       callChannelRef.current = null;
+      pc?.close();
+      pcRef.current = null;
+      streamRef.current?.getTracks().forEach((x) => x.stop());
     };
-  }, [peer.callId]);
+  }, [peer.callId, peer.myRole, mode, useVideo, notify]);
 
   /* real browser speech recognition where supported */
   const toggleDictation = () => {
@@ -1052,21 +1149,36 @@ function Call({ t, user, peer, onEnd, notify, onSafety }) {
     callChannelRef.current?.trigger("client-message", { text });
   };
 
-  const Tile = ({ label, self }) => (
-    <div className={clsx("relative flex aspect-video items-center justify-center overflow-hidden rounded-3xl border bg-indigo-950", t.border)}>
-      {self && camOn && !camError ? (
-        <video ref={videoRef} autoPlay playsInline muted className="h-full w-full object-cover" />
-      ) : (
-        <div className={clsx("flex h-20 w-20 items-center justify-center rounded-full font-serif text-2xl",
-          self ? "bg-indigo-800 text-indigo-100" : "bg-amber-200 text-indigo-950")}>
-          {label[0]}
-        </div>
-      )}
-      <span className="absolute bottom-3 left-3 rounded-full bg-indigo-950 bg-opacity-70 px-2.5 py-1 text-xs text-indigo-100">
-        {label}{self && muted ? " · muted" : ""}
-      </span>
-    </div>
-  );
+  const Tile = ({ label, self }) => {
+    /* Both video elements are always mounted and only hidden via CSS,
+       never conditionally rendered — a conditionally-mounted element
+       loses whatever was attached to it (srcObject) the moment it
+       unmounts, so toggling the camera off and back on, or the remote
+       track arriving after the element would've been skipped, would
+       both show a blank tile instead of the stream that's actually
+       there. Hiding leaves the element (and its stream) intact. */
+    const showVideo = self ? camOn && !camError : useVideo && hasRemoteStream;
+    return (
+      <div className={clsx("relative flex aspect-video items-center justify-center overflow-hidden rounded-3xl border bg-indigo-950", t.border)}>
+        {self ? (
+          <video ref={videoRef} autoPlay playsInline muted className={clsx("h-full w-full object-cover", !showVideo && "hidden")} />
+        ) : useVideo ? (
+          <video ref={remoteVideoRef} autoPlay playsInline className={clsx("h-full w-full object-cover", !showVideo && "hidden")} />
+        ) : null}
+        {!showVideo && (
+          <div className={clsx("absolute inset-0 flex items-center justify-center font-serif text-2xl", self ? "bg-indigo-800 text-indigo-100" : "bg-indigo-950")}>
+            <span className={clsx("flex h-20 w-20 items-center justify-center rounded-full",
+              self ? "bg-indigo-800" : "bg-amber-200 text-indigo-950")}>
+              {label[0]}
+            </span>
+          </div>
+        )}
+        <span className="absolute bottom-3 left-3 rounded-full bg-indigo-950 bg-opacity-70 px-2.5 py-1 text-xs text-indigo-100">
+          {label}{self && muted ? " · muted" : ""}{!self && !hasRemoteStream ? " · connecting audio…" : ""}
+        </span>
+      </div>
+    );
+  };
 
   return (
     <div className="relative mx-auto max-w-6xl px-4 py-6 sm:px-6">
@@ -1087,6 +1199,7 @@ function Call({ t, user, peer, onEnd, notify, onSafety }) {
             <Tile label={peer.handle} />
             {useVideo && <Tile label={user.handle} self />}
           </div>
+          {!useVideo && mode !== "text" && <audio ref={remoteAudioRef} autoPlay playsInline className="hidden" />}
           {breathe && <Breathing t={t} onClose={() => setBreathe(false)} />}
           {prompt && (
             <div className={clsx("mt-4 flex items-start justify-between gap-4 rounded-2xl border p-4", t.surface, t.border)}>
@@ -1538,8 +1651,8 @@ export default function App() {
   const takeCall = () => { setListenerRequested(true); nav("queue"); };
   const matchHuman = () => { setListenerRequested(false); nav("queue"); };
 
-  const onMatched = useCallback(({ peer: matchedPeer, callId, mode }) => {
-    setPeer({ ...matchedPeer, callId, mode });
+  const onMatched = useCallback(({ peer: matchedPeer, callId, mode, myRole }) => {
+    setPeer({ ...matchedPeer, callId, mode, myRole });
     nav("consent");
   }, [nav]);
 
