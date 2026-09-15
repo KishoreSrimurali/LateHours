@@ -998,6 +998,47 @@ function Breathing({ t, onClose }) {
 
 /* ---------------------------------- call ---------------------------------- */
 
+/* Hoisted out of Call so it has a stable component identity across
+   renders. Call re-renders every second (the secs ticker), and a
+   function component redeclared inline inside another component's body
+   is a *new* component type on every one of those renders — React then
+   unmounts and remounts its whole subtree instead of reusing it, which
+   for a <video> element means the freshly created node has no
+   srcObject, silently dropping whatever stream had just been attached
+   to the old one. Declaring Tile at module scope keeps it the same
+   component across renders, so React just updates the existing DOM
+   node and the stream stays attached. */
+function Tile({ t, label, self, camOn, camError, useVideo, hasRemoteStream, muted, videoRef, remoteVideoRef }) {
+  /* Both video elements are always mounted and only hidden via CSS,
+     never conditionally rendered — a conditionally-mounted element
+     loses whatever was attached to it (srcObject) the moment it
+     unmounts, so toggling the camera off and back on, or the remote
+     track arriving after the element would've been skipped, would
+     both show a blank tile instead of the stream that's actually
+     there. Hiding leaves the element (and its stream) intact. */
+  const showVideo = self ? camOn && !camError : useVideo && hasRemoteStream;
+  return (
+    <div className={clsx("relative flex aspect-video items-center justify-center overflow-hidden rounded-3xl border bg-indigo-950", t.border)}>
+      {self ? (
+        <video ref={videoRef} autoPlay playsInline muted className={clsx("h-full w-full object-cover", !showVideo && "hidden")} />
+      ) : useVideo ? (
+        <video ref={remoteVideoRef} autoPlay playsInline className={clsx("h-full w-full object-cover", !showVideo && "hidden")} />
+      ) : null}
+      {!showVideo && (
+        <div className={clsx("absolute inset-0 flex items-center justify-center font-serif text-2xl", self ? "bg-indigo-800 text-indigo-100" : "bg-indigo-950")}>
+          <span className={clsx("flex h-20 w-20 items-center justify-center rounded-full",
+            self ? "bg-indigo-800" : "bg-amber-200 text-indigo-950")}>
+            {label[0]}
+          </span>
+        </div>
+      )}
+      <span className="absolute bottom-3 left-3 rounded-full bg-indigo-950 bg-opacity-70 px-2.5 py-1 text-xs text-indigo-100">
+        {label}{self && muted ? " · muted" : ""}{!self && !hasRemoteStream ? " · connecting audio…" : ""}
+      </span>
+    </div>
+  );
+}
+
 function Call({ t, user, peer, onEnd, notify, onSafety }) {
   /* The mode that matters is the one the match actually negotiated
      (peer.mode, set from the /api/queue response) — not this browser's
@@ -1204,37 +1245,6 @@ function Call({ t, user, peer, onEnd, notify, onSafety }) {
     callChannelRef.current?.trigger("client-message", { text });
   };
 
-  const Tile = ({ label, self }) => {
-    /* Both video elements are always mounted and only hidden via CSS,
-       never conditionally rendered — a conditionally-mounted element
-       loses whatever was attached to it (srcObject) the moment it
-       unmounts, so toggling the camera off and back on, or the remote
-       track arriving after the element would've been skipped, would
-       both show a blank tile instead of the stream that's actually
-       there. Hiding leaves the element (and its stream) intact. */
-    const showVideo = self ? camOn && !camError : useVideo && hasRemoteStream;
-    return (
-      <div className={clsx("relative flex aspect-video items-center justify-center overflow-hidden rounded-3xl border bg-indigo-950", t.border)}>
-        {self ? (
-          <video ref={videoRef} autoPlay playsInline muted className={clsx("h-full w-full object-cover", !showVideo && "hidden")} />
-        ) : useVideo ? (
-          <video ref={remoteVideoRef} autoPlay playsInline className={clsx("h-full w-full object-cover", !showVideo && "hidden")} />
-        ) : null}
-        {!showVideo && (
-          <div className={clsx("absolute inset-0 flex items-center justify-center font-serif text-2xl", self ? "bg-indigo-800 text-indigo-100" : "bg-indigo-950")}>
-            <span className={clsx("flex h-20 w-20 items-center justify-center rounded-full",
-              self ? "bg-indigo-800" : "bg-amber-200 text-indigo-950")}>
-              {label[0]}
-            </span>
-          </div>
-        )}
-        <span className="absolute bottom-3 left-3 rounded-full bg-indigo-950 bg-opacity-70 px-2.5 py-1 text-xs text-indigo-100">
-          {label}{self && muted ? " · muted" : ""}{!self && !hasRemoteStream ? " · connecting audio…" : ""}
-        </span>
-      </div>
-    );
-  };
-
   return (
     <div className="relative mx-auto max-w-6xl px-4 py-6 sm:px-6 animate-fade-up">
       <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
@@ -1251,8 +1261,8 @@ function Call({ t, user, peer, onEnd, notify, onSafety }) {
       <div className="grid gap-5 lg:grid-cols-3">
         <div className={clsx("relative", chatOpen ? "lg:col-span-2" : "lg:col-span-3")}>
           <div className={clsx("grid gap-4", useVideo ? "sm:grid-cols-2" : "")}>
-            <Tile label={peer.handle} />
-            {useVideo && <Tile label={user.handle} self />}
+            <Tile t={t} label={peer.handle} camOn={camOn} camError={camError} useVideo={useVideo} hasRemoteStream={hasRemoteStream} muted={muted} videoRef={videoRef} remoteVideoRef={remoteVideoRef} />
+            {useVideo && <Tile t={t} label={user.handle} self camOn={camOn} camError={camError} useVideo={useVideo} hasRemoteStream={hasRemoteStream} muted={muted} videoRef={videoRef} remoteVideoRef={remoteVideoRef} />}
           </div>
           {!useVideo && mode !== "text" && <audio ref={remoteAudioRef} autoPlay playsInline className="hidden" />}
           {breathe && <Breathing t={t} onClose={() => setBreathe(false)} />}
