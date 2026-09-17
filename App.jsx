@@ -1105,7 +1105,21 @@ function Call({ t, user, peer, onEnd, notify, onSafety }) {
     let pc = null;
     let stallTimer = null;
     const client = getPusherClient();
-    const onMessage = (data) => setMsgs((m) => [...m, { id: Date.now() + Math.random(), who: "peer", text: data.text }]);
+    /* Pusher client events travel peer-to-peer with no server in the
+       middle — the matched peer is an authenticated account, but their
+       *browser* is still untrusted: nothing stops a modified client from
+       triggering this event with any shape or size of payload, bypassing
+       the sender-side sanitize()/length cap in send() below entirely.
+       React's JSX escaping already rules out script injection from this
+       text, but re-validate type and re-apply the cap here anyway so a
+       hostile peer can't shove an arbitrarily huge string into this tab's
+       memory or render state. */
+    const onMessage = (data) => {
+      if (typeof data?.text !== "string") return;
+      const text = sanitize(data.text, 2000);
+      if (!text) return;
+      setMsgs((m) => [...m, { id: Date.now() + Math.random(), who: "peer", text }]);
+    };
     let onSignal = null;
 
     (async () => {

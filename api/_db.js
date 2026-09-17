@@ -25,8 +25,15 @@ function stripChannelBinding(connectionString) {
 }
 
 /* One pool per warm serverless instance. Neon/Vercel Postgres/Supabase all
-   want TLS; local Postgres during `vercel dev` usually doesn't advertise a
-   cert, so we don't fail closed on an unverifiable chain. */
+   terminate TLS with certificates that chain to a public CA already in
+   Node's trust store, so the default here verifies the chain
+   (rejectUnauthorized: true) — an unverified connection is exactly the
+   shape a MITM on the DB traffic would use, and it costs nothing to
+   check.
+
+   Local Postgres during `vercel dev` usually doesn't speak TLS at all;
+   append `?sslmode=disable` to DATABASE_URL for that case (documented in
+   .env.example) rather than weakening the default for everyone. */
 function getPool() {
   if (!pool) {
     const raw = process.env.DATABASE_URL;
@@ -38,7 +45,7 @@ function getPool() {
       connectionString,
       ssl: connectionString.includes('sslmode=disable')
         ? false
-        : { rejectUnauthorized: false },
+        : { rejectUnauthorized: true },
       max: 5,
     });
   }
@@ -180,6 +187,17 @@ export async function ensureSchema() {
         mode TEXT NOT NULL,
         wait_seconds INTEGER NOT NULL DEFAULT 0,
         created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+      );
+    `);
+    /* Backing store for api/_ratelimit.js's fixed-window counter — see
+       there for why this lives in Postgres rather than memory. One row
+       per (endpoint, identity) key; there's no foreign key here since a
+       key can be an IP address with no associated account. */
+    await query(`
+      CREATE TABLE IF NOT EXISTS rate_limits (
+        key TEXT PRIMARY KEY,
+        count INTEGER NOT NULL DEFAULT 1,
+        window_start TIMESTAMPTZ NOT NULL DEFAULT now()
       );
     `);
   })();

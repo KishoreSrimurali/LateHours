@@ -4,7 +4,8 @@ import {
   hashPassword, verifyPassword, signSession, setSessionCookie, clearSessionCookie,
   getSessionAccountId, requireAccount, toPublicAccount,
 } from '../_auth.js';
-import { EMAIL_RE, TOPICS, LANGUAGES, MODES, ROLES, sanitize, methodNotAllowed, badRequest, withErrors } from '../_util.js';
+import { EMAIL_RE, TOPICS, LANGUAGES, MODES, ROLES, sanitize, methodNotAllowed, badRequest, tooManyRequests, withErrors } from '../_util.js';
+import { checkRateLimit, clientIp } from '../_ratelimit.js';
 
 /* One file covering /api/auth/signup, /login, /logout, /me — merged from
    four separate functions to stay under Vercel Hobby's 12-function-per-
@@ -24,6 +25,13 @@ export default withErrors(async function handler(req, res) {
 
 async function signup(req, res) {
   if (req.method !== 'POST') return methodNotAllowed(res, ['POST']);
+
+  /* Signup has no CAPTCHA or email verification in front of it, so
+     without a limit here a script can mint accounts as fast as the DB
+     will insert them. Generous enough that a shared office/campus IP
+     signing several real people up in an hour won't get blocked. */
+  const ipLimit = await checkRateLimit(`signup:ip:${clientIp(req)}`, 10, 60 * 60);
+  if (!ipLimit.allowed) return tooManyRequests(res, ipLimit.retryAfter);
 
   const body = req.body || {};
   const email = sanitize(body.email, 254).trim().toLowerCase();
@@ -62,11 +70,24 @@ async function signup(req, res) {
 async function login(req, res) {
   if (req.method !== 'POST') return methodNotAllowed(res, ['POST']);
 
+  /* Two independent limits: per-IP catches a script trying many emails
+     against one source, per-(IP+email) catches repeated guesses against
+     one specific account without also locking out everyone else behind
+     the same IP (a shared office network, a campus NAT). Checked before
+     touching the DB for the real lookup so a lockout costs the attacker
+     the same either way, regardless of whether the email exists. */
+  const ip = clientIp(req);
+  const ipLimit = await checkRateLimit(`login:ip:${ip}`, 20, 15 * 60);
+  if (!ipLimit.allowed) return tooManyRequests(res, ipLimit.retryAfter);
+
   const body = req.body || {};
   const email = sanitize(body.email, 254).trim().toLowerCase();
   const password = String(body.password ?? '');
 
   if (!EMAIL_RE.test(email)) return badRequest(res, "That email address isn't complete.");
+
+  const acctLimit = await checkRateLimit(`login:acct:${ip}:${email}`, 8, 15 * 60);
+  if (!acctLimit.allowed) return tooManyRequests(res, acctLimit.retryAfter);
 
   const { rows } = await query('SELECT * FROM accounts WHERE email = $1', [email]);
   const account = rows[0];

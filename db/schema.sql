@@ -87,3 +87,12 @@ CREATE TABLE IF NOT EXISTS calls (
   wait_seconds INTEGER NOT NULL DEFAULT 0, -- how long the seeker waited before this match
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- Backing store for api/_ratelimit.js's fixed-window rate limiter (login,
+-- signup). One row per (endpoint, identity) key; no foreign key since a
+-- key can be a bare IP address with no associated account.
+CREATE TABLE IF NOT EXISTS rate_limits (
+  key TEXT PRIMARY KEY,
+  count INTEGER NOT NULL DEFAULT 1,
+  window_start TIMESTAMPTZ NOT NULL DEFAULT now()
+);

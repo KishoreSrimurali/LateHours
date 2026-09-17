@@ -32,6 +32,11 @@ export function unauthorized(res) {
   return res.status(401).json({ error: 'Sign in required.' });
 }
 
+export function tooManyRequests(res, retryAfterSeconds) {
+  res.setHeader('Retry-After', String(retryAfterSeconds));
+  return res.status(429).json({ error: 'Too many attempts. Please wait and try again.' });
+}
+
 /* Wraps a handler so an unexpected throw (a bad env var, a dropped DB
    connection) becomes a 500 with a generic body instead of a raw stack
    trace leaking into the response. */
