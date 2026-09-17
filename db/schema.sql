@@ -101,3 +101,12 @@ CREATE TABLE IF NOT EXISTS rate_limits (
   count INTEGER NOT NULL DEFAULT 1,
   window_start TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- Backs the click-to-verify check on login/signup. A row is a still-
+-- unused, still-live token; consuming one is a single DELETE ... WHERE
+-- token = $1 AND expires_at > now() RETURNING token, so it can only ever
+-- be spent once even under a race.
+CREATE TABLE IF NOT EXISTS captcha_tokens (
+  token TEXT PRIMARY KEY,
+  expires_at TIMESTAMPTZ NOT NULL
+);

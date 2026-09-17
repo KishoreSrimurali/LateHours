@@ -387,6 +387,26 @@ function Auth({ t, onAuthed, notify, onBack }) {
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
 
+  /* Click-to-verify: the token only exists once the checkbox below has
+     actually been clicked (it's fetched at that moment, not pre-loaded
+     invisibly), and the server burns it the instant it's used — win or
+     lose — so it always needs re-clicking before the next attempt. */
+  const [captchaToken, setCaptchaToken] = useState(null);
+  const [captchaBusy, setCaptchaBusy] = useState(false);
+
+  const verifyCaptcha = async () => {
+    if (captchaBusy || captchaToken) return;
+    setCaptchaBusy(true);
+    try {
+      const { token } = await api("/api/auth/captcha");
+      setCaptchaToken(token);
+    } catch {
+      notify("Couldn't verify — try clicking again.", "bad");
+    } finally {
+      setCaptchaBusy(false);
+    }
+  };
+
   const strength = useMemo(() => {
     let s = 0;
     if (pw.length >= 8) s++;
@@ -402,18 +422,24 @@ function Auth({ t, onAuthed, notify, onBack }) {
     if (clean.length < 3) return setErr("Username needs at least 3 characters.");
     if (!USERNAME_RE.test(clean)) return setErr("Username can only use letters, numbers, underscore, hyphen, and period.");
     if (pw.length < 8) return setErr("Passwords need at least 8 characters.");
+    if (mode === "signup" && !age) return setErr("Confirm you're 18 or older to continue.");
+    if (!captchaToken) return setErr("Click to verify you're human first.");
+    const token = captchaToken;
+    setCaptchaToken(null); // single-use either way — always clear it here
+
     if (mode === "signup") {
-      if (!age) return setErr("Confirm you're 18 or older to continue.");
       /* The account isn't created yet — signup needs a handle, role, and
          topics that Onboarding collects next. This just carries the
          credentials forward; /api/auth/signup runs once onboarding
-         finishes, and that's where a taken username is actually caught. */
-      onAuthed({ username: clean, pw, age18: age }, true);
+         finishes, and that's where a taken username is actually caught.
+         The captcha token rides along too — it's good for 15 minutes,
+         comfortably covering the rest of onboarding. */
+      onAuthed({ username: clean, pw, age18: age, captchaToken: token }, true);
       return;
     }
     setBusy(true);
     try {
-      const { account } = await api("/api/auth/login", { method: "POST", body: { username: clean, password: pw } });
+      const { account } = await api("/api/auth/login", { method: "POST", body: { username: clean, password: pw, captchaToken: token } });
       onAuthed(account, false);
       notify(`Welcome back, ${account.handle}`);
     } catch (e) {
@@ -482,6 +508,18 @@ function Auth({ t, onAuthed, notify, onBack }) {
             </span>
           </button>
         )}
+
+        <button type="button" onClick={verifyCaptcha} disabled={captchaBusy || !!captchaToken}
+          className={clsx("flex w-full items-center gap-3 rounded-xl border p-3 text-left transition-colors",
+            captchaToken ? "border-emerald-400" : t.border, !captchaToken && !captchaBusy && t.hover)}>
+          <span className={clsx("flex h-5 w-5 shrink-0 items-center justify-center rounded-md border",
+            captchaToken ? "border-emerald-400 bg-emerald-300 text-indigo-950" : t.border)}>
+            {captchaBusy ? <Loader size={13} className="animate-spin" /> : captchaToken ? <Check size={13} strokeWidth={3} /> : null}
+          </span>
+          <span className={clsx("text-sm", t.muted)}>
+            {captchaToken ? "Verified — you're human" : captchaBusy ? "Verifying…" : "Click to verify you're human"}
+          </span>
+        </button>
 
         {err && (
           <p className="flex items-start gap-2 rounded-xl bg-rose-500 px-4 py-3 text-sm text-white">
@@ -1713,7 +1751,7 @@ export default function App() {
 
   const handleAuthed = (acct, isNew) => {
     if (isNew) {
-      setDraft((d) => ({ ...d, username: acct.username, pw: acct.pw, age18: acct.age18, handle: pick(HANDLES) }));
+      setDraft((d) => ({ ...d, username: acct.username, pw: acct.pw, age18: acct.age18, captchaToken: acct.captchaToken, handle: pick(HANDLES) }));
       nav("onboarding");
     } else {
       setUser(acct);
@@ -1728,7 +1766,7 @@ export default function App() {
         body: {
           username: draft.username, password: draft.pw, handle: draft.handle.trim(),
           role: draft.role, topics: draft.topics, mode: draft.mode, lang: draft.lang,
-          age18: draft.age18,
+          age18: draft.age18, captchaToken: draft.captchaToken,
         },
       });
       setUser(account);

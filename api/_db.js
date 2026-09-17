@@ -214,6 +214,19 @@ export async function ensureSchema() {
         window_start TIMESTAMPTZ NOT NULL DEFAULT now()
       );
     `);
+    /* Backs the click-to-verify check on login/signup (api/auth/[action].js
+       captcha/consumeCaptcha). A row is a still-unused, still-live token —
+       consuming one is a single DELETE ... WHERE token = $1 AND expires_at
+       > now() RETURNING token, so two requests racing to spend the same
+       token can't both succeed (only the first DELETE actually removes a
+       row; the second finds nothing). No foreign key: a token exists
+       before anyone is signed in. */
+    await query(`
+      CREATE TABLE IF NOT EXISTS captcha_tokens (
+        token TEXT PRIMARY KEY,
+        expires_at TIMESTAMPTZ NOT NULL
+      );
+    `);
   })();
 
   migrated = attempt;

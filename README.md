@@ -10,6 +10,10 @@ in-call chat.
 
 - **Accounts** — username/password signup, bcrypt-hashed, JWT session in an
   httpOnly cookie. `api/auth/*.js`, `api/account.js`.
+- **Click-to-verify on login/signup** — a self-hosted stand-in for a
+  third-party CAPTCHA: the checkbox fetches a single-use, server-issued
+  token at the moment it's clicked, and signup/login require and burn
+  it. No third-party key needed. `api/auth/[action].js`.
 - **Persistence** — moods, past-session history, and blocked handles are
   stored per account in Postgres and survive a reload. `api/moods.js`,
   `api/sessions.js`, `api/blocked.js`.
