@@ -8,7 +8,7 @@ in-call chat.
 
 ## What's real here
 
-- **Accounts** — email/password signup, bcrypt-hashed, JWT session in an
+- **Accounts** — username/password signup, bcrypt-hashed, JWT session in an
   httpOnly cookie. `api/auth/*.js`, `api/account.js`.
 - **Persistence** — moods, past-session history, and blocked handles are
   stored per account in Postgres and survive a reload. `api/moods.js`,

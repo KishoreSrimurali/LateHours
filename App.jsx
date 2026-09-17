@@ -374,9 +374,13 @@ function Landing({ t, onStart, onSafety, presence }) {
 
 /* ---------------------------------- auth ---------------------------------- */
 
+/* Mirrors api/_util.js's USERNAME_RE — kept in sync by hand since this
+   file can't import server code across the client/server boundary. */
+const USERNAME_RE = /^[A-Za-z0-9_.-]+$/;
+
 function Auth({ t, onAuthed, notify, onBack }) {
   const [mode, setMode] = useState("signup");
-  const [email, setEmail] = useState("");
+  const [username, setUsername] = useState("");
   const [pw, setPw] = useState("");
   const [show, setShow] = useState(false);
   const [age, setAge] = useState(false);
@@ -385,7 +389,7 @@ function Auth({ t, onAuthed, notify, onBack }) {
 
   const strength = useMemo(() => {
     let s = 0;
-    if (pw.length >= 12) s++;
+    if (pw.length >= 8) s++;
     if (/[A-Z]/.test(pw) && /[a-z]/.test(pw)) s++;
     if (/[0-9]/.test(pw)) s++;
     if (/[^A-Za-z0-9]/.test(pw)) s++;
@@ -394,21 +398,22 @@ function Auth({ t, onAuthed, notify, onBack }) {
 
   const submit = async () => {
     setErr("");
-    const clean = sanitize(email, 254).trim().toLowerCase();
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(clean)) return setErr("That email address isn't complete.");
-    if (pw.length < 12) return setErr("Passwords need at least 12 characters.");
+    const clean = sanitize(username, 32).trim();
+    if (clean.length < 3) return setErr("Username needs at least 3 characters.");
+    if (!USERNAME_RE.test(clean)) return setErr("Username can only use letters, numbers, underscore, hyphen, and period.");
+    if (pw.length < 8) return setErr("Passwords need at least 8 characters.");
     if (mode === "signup") {
       if (!age) return setErr("Confirm you're 18 or older to continue.");
       /* The account isn't created yet — signup needs a handle, role, and
          topics that Onboarding collects next. This just carries the
          credentials forward; /api/auth/signup runs once onboarding
-         finishes, and that's where a taken email is actually caught. */
-      onAuthed({ email: clean, pw, age18: age }, true);
+         finishes, and that's where a taken username is actually caught. */
+      onAuthed({ username: clean, pw, age18: age }, true);
       return;
     }
     setBusy(true);
     try {
-      const { account } = await api("/api/auth/login", { method: "POST", body: { email: clean, password: pw } });
+      const { account } = await api("/api/auth/login", { method: "POST", body: { username: clean, password: pw } });
       onAuthed(account, false);
       notify(`Welcome back, ${account.handle}`);
     } catch (e) {
@@ -431,25 +436,25 @@ function Auth({ t, onAuthed, notify, onBack }) {
       </h1>
       <p className={clsx("mt-3 text-sm leading-relaxed", t.muted)}>
         {mode === "signup"
-          ? "Your email is used for sign-in and nothing else. Listeners only ever see the handle you choose next."
+          ? "Your username is used for sign-in and nothing else. Listeners only ever see the handle you choose next."
           : "Your preferences and private notes are waiting."}
       </p>
 
       <div className="mt-8 space-y-5">
-        <Field t={t} label="Email">
-          <Input t={t} type="email" value={email} autoComplete="email" maxLength={254}
-            onChange={(e) => setEmail(e.target.value)}
+        <Field t={t} label="Username">
+          <Input t={t} type="text" value={username} autoComplete="username" maxLength={32}
+            onChange={(e) => setUsername(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && submit()}
-            placeholder="you@example.com" />
+            placeholder="yourusername" />
         </Field>
 
-        <Field t={t} label="Password" hint={mode === "signup" ? "Twelve characters minimum. Length beats complexity." : undefined}>
+        <Field t={t} label="Password" hint={mode === "signup" ? "Eight characters minimum. Length beats complexity." : undefined}>
           <div className="relative">
             <Input t={t} type={show ? "text" : "password"} value={pw} className="pr-12" maxLength={128}
               autoComplete={mode === "signup" ? "new-password" : "current-password"}
               onChange={(e) => setPw(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && submit()}
-              placeholder="At least 12 characters" />
+              placeholder="At least 8 characters" />
             <button onClick={() => setShow(!show)} aria-label={show ? "Hide password" : "Show password"}
               className={clsx("absolute right-3 top-1/2 -translate-y-1/2 rounded-full p-1.5", t.hover)}>
               {show ? <EyeOff size={16} /> : <Eye size={16} />}
@@ -1616,7 +1621,7 @@ function Settings({ t, user, setUser, blocked, setBlocked, dark, setDark, onBack
             </Button>
           </div>
           <p className={clsx("mt-4 text-sm leading-relaxed", t.faint)}>
-            Deleting removes your email, handle, preferences, and private notes. Conversations were never stored.
+            Deleting removes your username, handle, preferences, and private notes. Conversations were never stored.
           </p>
         </section>
       </div>
@@ -1708,7 +1713,7 @@ export default function App() {
 
   const handleAuthed = (acct, isNew) => {
     if (isNew) {
-      setDraft((d) => ({ ...d, email: acct.email, pw: acct.pw, age18: acct.age18, handle: pick(HANDLES) }));
+      setDraft((d) => ({ ...d, username: acct.username, pw: acct.pw, age18: acct.age18, handle: pick(HANDLES) }));
       nav("onboarding");
     } else {
       setUser(acct);
@@ -1721,7 +1726,7 @@ export default function App() {
       const { account } = await api("/api/auth/signup", {
         method: "POST",
         body: {
-          email: draft.email, password: draft.pw, handle: draft.handle.trim(),
+          username: draft.username, password: draft.pw, handle: draft.handle.trim(),
           role: draft.role, topics: draft.topics, mode: draft.mode, lang: draft.lang,
           age18: draft.age18,
         },

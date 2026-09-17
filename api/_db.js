@@ -87,7 +87,7 @@ export async function ensureSchema() {
     await query(`
       CREATE TABLE IF NOT EXISTS accounts (
         id TEXT PRIMARY KEY,
-        email TEXT UNIQUE NOT NULL,
+        username TEXT NOT NULL,
         password_hash TEXT NOT NULL,
         handle TEXT NOT NULL,
         role TEXT NOT NULL DEFAULT 'seeker',
@@ -103,6 +103,20 @@ export async function ensureSchema() {
         created_at TIMESTAMPTZ NOT NULL DEFAULT now()
       );
     `);
+    /* Login moved from email to username. CREATE TABLE IF NOT EXISTS only
+       shapes a brand-new database — a table created back when this column
+       was `email TEXT UNIQUE NOT NULL` keeps that shape forever otherwise.
+       Add the new column (nullable — ALTER TABLE can't add a NOT NULL
+       column to a table that may already hold rows) and drop the old one;
+       DROP COLUMN also drops whatever UNIQUE constraint/index was tied to
+       it, so there's nothing stale left pointing at email. Uniqueness is
+       enforced case-insensitively via a functional index below rather
+       than a plain UNIQUE constraint on the column, so "Sage" and "sage"
+       can't both sign up — the same reasoning as the lower(email) compare
+       login used to do by lower-casing before every query. */
+    await query(`ALTER TABLE accounts ADD COLUMN IF NOT EXISTS username TEXT;`);
+    await query(`ALTER TABLE accounts DROP COLUMN IF EXISTS email;`);
+    await query(`CREATE UNIQUE INDEX IF NOT EXISTS accounts_username_lower_idx ON accounts (lower(username));`);
     await query(`
       CREATE TABLE IF NOT EXISTS moods (
         id BIGSERIAL PRIMARY KEY,

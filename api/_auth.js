@@ -96,7 +96,7 @@ export function getSessionAccountId(req) {
 export function toPublicAccount(row) {
   return {
     id: row.id,
-    email: row.email,
+    username: row.username,
     handle: row.handle,
     role: row.role,
     topics: row.topics || [],

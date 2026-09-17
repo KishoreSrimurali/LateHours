@@ -8,9 +8,9 @@
 
 CREATE TABLE IF NOT EXISTS accounts (
   id TEXT PRIMARY KEY,
-  email TEXT UNIQUE NOT NULL,
+  username TEXT NOT NULL,                        -- uniqueness enforced case-insensitively, see the index below
   password_hash TEXT NOT NULL,
-  handle TEXT NOT NULL,
+  handle TEXT NOT NULL,                           -- the public-facing display name (separate from username)
   role TEXT NOT NULL DEFAULT 'seeker',           -- seeker | listener | both
   topics TEXT[] NOT NULL DEFAULT '{}',
   mode TEXT NOT NULL DEFAULT 'voice',             -- voice | video | text
@@ -23,6 +23,11 @@ CREATE TABLE IF NOT EXISTS accounts (
   time_warn BOOLEAN NOT NULL DEFAULT true,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- Case-insensitive uniqueness on the login username ("Sage" and "sage"
+-- can't both sign up) — a functional index rather than a plain UNIQUE
+-- constraint on the column, since login always compares on lower().
+CREATE UNIQUE INDEX IF NOT EXISTS accounts_username_lower_idx ON accounts (lower(username));
 
 CREATE TABLE IF NOT EXISTS moods (
   id BIGSERIAL PRIMARY KEY,

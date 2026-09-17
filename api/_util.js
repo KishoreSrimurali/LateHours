@@ -1,7 +1,11 @@
 /* Shared helpers for the /api functions. Small and dependency-free on
    purpose — this file is imported by nearly every handler. */
 
-export const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
+/* Letters, digits, underscore, hyphen, period — deliberately excludes
+   whitespace and lookalike/formatting characters a login identifier
+   shouldn't have to worry about. Length is checked separately so the
+   error message can say which rule actually failed. */
+export const USERNAME_RE = /^[A-Za-z0-9_.-]+$/;
 
 /* Re-exported here (rather than importing ../shared/constants.js directly
    in every handler) so every existing `import { TOPICS } from './_util.js'`

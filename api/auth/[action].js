@@ -4,7 +4,7 @@ import {
   hashPassword, verifyPassword, signSession, setSessionCookie, clearSessionCookie,
   getSessionAccountId, requireAccount, toPublicAccount,
 } from '../_auth.js';
-import { EMAIL_RE, TOPICS, LANGUAGES, MODES, ROLES, sanitize, methodNotAllowed, badRequest, tooManyRequests, withErrors } from '../_util.js';
+import { USERNAME_RE, TOPICS, LANGUAGES, MODES, ROLES, sanitize, methodNotAllowed, badRequest, tooManyRequests, withErrors } from '../_util.js';
 import { checkRateLimit, clientIp } from '../_ratelimit.js';
 
 /* One file covering /api/auth/signup, /login, /logout, /me — merged from
@@ -34,7 +34,7 @@ async function signup(req, res) {
   if (!ipLimit.allowed) return tooManyRequests(res, ipLimit.retryAfter);
 
   const body = req.body || {};
-  const email = sanitize(body.email, 254).trim().toLowerCase();
+  const username = sanitize(body.username, 32).trim();
   const password = String(body.password ?? '');
   const handle = sanitize(body.handle, 18).trim();
   const role = ROLES.includes(body.role) ? body.role : 'seeker';
@@ -43,24 +43,25 @@ async function signup(req, res) {
   const lang = LANGUAGES.includes(body.lang) ? body.lang : 'English';
   const age18 = body.age18 === true;
 
-  if (!EMAIL_RE.test(email)) return badRequest(res, "That email address isn't complete.");
-  if (password.length < 12) return badRequest(res, 'Passwords need at least 12 characters.');
+  if (username.length < 3) return badRequest(res, 'Username needs at least 3 characters.');
+  if (!USERNAME_RE.test(username)) return badRequest(res, 'Username can only use letters, numbers, underscore, hyphen, and period.');
+  if (password.length < 8) return badRequest(res, 'Passwords need at least 8 characters.');
   if (handle.length < 2) return badRequest(res, 'Pick a handle with at least 2 characters.');
   if (!age18) return badRequest(res, "Confirm you're 18 or older to continue.");
   if (topics.length === 0) return badRequest(res, 'Pick at least one topic.');
 
-  const existing = await query('SELECT id FROM accounts WHERE email = $1', [email]);
+  const existing = await query('SELECT id FROM accounts WHERE lower(username) = lower($1)', [username]);
   if (existing.rows.length) {
-    return badRequest(res, 'An account already uses that email. Sign in instead.');
+    return badRequest(res, 'That username is already taken. Sign in instead, or pick another.');
   }
 
   const id = crypto.randomUUID();
   const passwordHash = await hashPassword(password);
   const { rows } = await query(
-    `INSERT INTO accounts (id, email, password_hash, handle, role, topics, mode, lang)
+    `INSERT INTO accounts (id, username, password_hash, handle, role, topics, mode, lang)
      VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
      RETURNING *`,
-    [id, email, passwordHash, handle, role, topics, mode, lang]
+    [id, username, passwordHash, handle, role, topics, mode, lang]
   );
 
   setSessionCookie(req, res, signSession(id));
@@ -70,31 +71,31 @@ async function signup(req, res) {
 async function login(req, res) {
   if (req.method !== 'POST') return methodNotAllowed(res, ['POST']);
 
-  /* Two independent limits: per-IP catches a script trying many emails
-     against one source, per-(IP+email) catches repeated guesses against
+  /* Two independent limits: per-IP catches a script trying many usernames
+     against one source, per-(IP+username) catches repeated guesses against
      one specific account without also locking out everyone else behind
      the same IP (a shared office network, a campus NAT). Checked before
      touching the DB for the real lookup so a lockout costs the attacker
-     the same either way, regardless of whether the email exists. */
+     the same either way, regardless of whether the username exists. */
   const ip = clientIp(req);
   const ipLimit = await checkRateLimit(`login:ip:${ip}`, 20, 15 * 60);
   if (!ipLimit.allowed) return tooManyRequests(res, ipLimit.retryAfter);
 
   const body = req.body || {};
-  const email = sanitize(body.email, 254).trim().toLowerCase();
+  const username = sanitize(body.username, 32).trim();
   const password = String(body.password ?? '');
 
-  if (!EMAIL_RE.test(email)) return badRequest(res, "That email address isn't complete.");
+  if (!username) return badRequest(res, 'Enter your username.');
 
-  const acctLimit = await checkRateLimit(`login:acct:${ip}:${email}`, 8, 15 * 60);
+  const acctLimit = await checkRateLimit(`login:acct:${ip}:${username.toLowerCase()}`, 8, 15 * 60);
   if (!acctLimit.allowed) return tooManyRequests(res, acctLimit.retryAfter);
 
-  const { rows } = await query('SELECT * FROM accounts WHERE email = $1', [email]);
+  const { rows } = await query('SELECT * FROM accounts WHERE lower(username) = lower($1)', [username]);
   const account = rows[0];
-  /* Same error either way — confirming that an email exists lets an
+  /* Same error either way — confirming that a username exists lets an
      attacker enumerate accounts. */
   const ok = account && (await verifyPassword(password, account.password_hash));
-  if (!ok) return badRequest(res, "That email and password don't match.");
+  if (!ok) return badRequest(res, "That username and password don't match.");
 
   setSessionCookie(req, res, signSession(account.id));
   return res.status(200).json({ account: toPublicAccount(account) });
