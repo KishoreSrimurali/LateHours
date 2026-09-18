@@ -61,6 +61,13 @@ const ICE_SERVERS = [
   { urls: "stun:stun1.l.google.com:19302" },
 ];
 
+/* Late Hours is an independent, self-funded project — not a
+   registered nonprofit. Donate copy anywhere in this file must stay
+   honest about that (hosting/running costs, not tax-deductible
+   charitable giving) rather than imply a legal status that doesn't
+   exist. */
+const DONATE_URL = "https://www.paypal.com/paypalme/gots3x";
+
 /* ---------------------------------- utils --------------------------------- */
 
 const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
@@ -1687,6 +1694,12 @@ export default function App() {
   const [presence, setPresence] = useState({ listenersOnline: null, medianWaitSeconds: null });
   const [safetyOpen, setSafetyOpen] = useState(false);
   const [toasts, setToasts] = useState([]);
+  /* Deliberately plain useState(true), not a ref/localStorage-backed
+     "seen it already" flag — the point is that this comes back every
+     time the page actually reloads, and a fresh useState is exactly
+     that: it starts true again on every mount, same as every other
+     piece of state in this component. */
+  const [donateOpen, setDonateOpen] = useState(true);
 
   /* Two-phase removal — flag as leaving so the exit transition has
      something to animate, then actually drop it from the array once
@@ -1910,6 +1923,20 @@ export default function App() {
         </ul>
       </Modal>
 
+      <Modal t={t} open={donateOpen} onClose={() => setDonateOpen(false)} title="Help keep Late Hours running">
+        <p className={clsx("text-sm leading-relaxed", t.muted)}>
+          Late Hours is an independent, self-funded project — there's no company or nonprofit behind
+          it, just hosting and calling costs to keep listeners and seekers connected. If this has been
+          useful, even $1 helps keep it online.
+        </p>
+        <div className="mt-6 flex flex-wrap gap-3">
+          <Button _t={t} size="md" onClick={() => { window.open(DONATE_URL, "_blank", "noopener,noreferrer"); setDonateOpen(false); }}>
+            <Heart size={15} /> Donate
+          </Button>
+          <Button _t={t} size="md" variant="ghost" onClick={() => setDonateOpen(false)}>Maybe later</Button>
+        </div>
+      </Modal>
+
       <Toasts items={toasts} dismiss={dismiss} />
 
       <footer className={clsx("mt-16 border-t px-6 py-10", t.border)}>
@@ -1919,6 +1946,12 @@ export default function App() {
             Peer support, not treatment. Human listeners are volunteers who completed a short listening
             course. They can't diagnose, prescribe, or manage a crisis.
           </p>
+          <div className="mt-5 flex flex-wrap items-center gap-4">
+            <a href={DONATE_URL} target="_blank" rel="noopener noreferrer"
+              className={clsx("inline-flex items-center gap-1.5 rounded-full px-3.5 py-1.5 text-xs font-medium transition-colors", t.chip, t.hover)}>
+              <Heart size={13} /> Donate — help keep this running
+            </a>
+          </div>
           <p className={clsx("mt-6 text-xs", t.faint)}>Built by Vexoro team</p>
         </div>
       </footer>
