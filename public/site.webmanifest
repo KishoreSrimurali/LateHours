@@ -1,0 +1,17 @@
+{
+  "name": "Late Hours",
+  "short_name": "Late Hours",
+  "description": "Free, anonymous peer support by voice, video, or text — no names, no appointment.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0f172a",
+  "theme_color": "#0f172a",
+  "icons": [
+    {
+      "src": "/logo.png",
+      "sizes": "300x300",
+      "type": "image/png",
+      "purpose": "any"
+    }
+  ]
+}
